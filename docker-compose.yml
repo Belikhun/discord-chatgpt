@@ -6,3 +6,5 @@ services:
     container_name: "gptchat"
     user: root
     restart: always
+    volumes:
+      - .:/usr/src/app

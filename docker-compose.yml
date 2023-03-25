@@ -1,0 +1,8 @@
+# docker-compose.yml
+version: "2.8"
+services:
+  gptchat:
+    build: .
+    container_name: "gptchat"
+    user: root
+    restart: always

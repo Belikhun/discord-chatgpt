@@ -90,7 +90,7 @@ async def on_message(message: discord.Message):
 		chat.reset()
 
 	async with message.channel.typing():
-		reply = await asyncio.to_thread(chat.chat, message.content.strip())
+		reply = await asyncio.to_thread(chat.chat, message.clean_content.strip())
 		reply += f"\n\n> `🕒 {chat.runtime:.2f}s // 💸 {'/'.join(map(str, chat.tokens))} (p/c/U) // 🔮 {len(chat.messages)} contexts`"
 
 	await message.channel.send(reply, mention_author=False, reference=message)

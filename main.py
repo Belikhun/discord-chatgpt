@@ -74,8 +74,12 @@ async def on_ready():
 async def on_message(message: discord.Message):
 	global chat
 	
-	if message.author == client.user or message.author.bot:
+	if (message.author == client.user or message.author.bot):
 		return
+
+	if (message.reference != None and message.reference.cached_message != None):
+		if (message.reference.cached_message.author != client.user):
+			return
 
 	if (len(message.content) < 2):
 		await message.channel.send("> :warning:  Tin nhắn quá ngắn!", mention_author=False, reference=message)

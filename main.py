@@ -145,7 +145,7 @@ async def on_message(message: discord.Message):
 	if (len(message.content.split(" ")) < 3):
 		chat.reset()
 
-	chat_obj = chat_alt if (message.content.startswith("$") and chat_alt) else chat
+	chat_obj = chat_alt if (message.content.startswith("^") and chat_alt) else chat
 
 	async with message.channel.typing():
 		reply = await asyncio.to_thread(chat_obj.chat, message.clean_content.strip("\r\n >*-"))

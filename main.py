@@ -148,7 +148,7 @@ async def on_message(message: discord.Message):
 	chat_obj = chat_alt if (message.content.startswith("^") and chat_alt) else chat
 
 	async with message.channel.typing():
-		reply = await asyncio.to_thread(chat_obj.chat, message.clean_content.strip("\r\n >*-"))
+		reply = await asyncio.to_thread(chat_obj.chat, message.clean_content.strip("\r\n >*-^"))
 		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 💸 {'/'.join(map(str, chat_obj.tokens))} (p/c/U) // 🔮 {len(chat_obj.messages)} contexts`"
 
 	await send_long_message(message.channel, reply, message)

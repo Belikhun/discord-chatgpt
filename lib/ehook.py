@@ -11,8 +11,7 @@ from ntpath import basename
 import sys
 import os
 
-stripOutput = False if os.getenv("CI") else True
-init(autoreset = True, strip = stripOutput)
+init(autoreset = True, strip = False)
 
 def myexcepthook(exctype, value, tb):
 	line = f"{Fore.LIGHTYELLOW_EX}/{Fore.LIGHTBLACK_EX}/" * 14

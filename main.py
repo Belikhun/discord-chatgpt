@@ -63,6 +63,47 @@ def check_idle():
 
 		time.sleep(2)
 
+async def send_long_message(channel, message, reference):
+	# Set the maximum length of each message
+	max_length = 2000
+
+	# Are we inside a codeblock?
+	codeblock = None
+	sent = False
+	current = ""
+	target = ""
+
+	# Check if the message is too long
+	if len(message) > max_length:
+		lines = message.split("\n")
+
+		for line in lines:
+			target += f"\n{line}" if target != "" else line
+
+			if line.startswith("```"):
+				if codeblock is None:
+					codeblock = line
+				else:
+					codeblock = None
+
+			if len(target) > max_length:
+				if (codeblock != None):
+					current += "\n```"
+				
+				await channel.send(current, mention_author=False, reference=reference)
+				await asyncio.sleep(1)
+
+				current = ""
+				target = f"{codeblock}\n{line}" if codeblock != None else line
+
+			current = target
+
+		# Send the remaining message
+		await channel.send(current, mention_author=False, reference=reference)
+	else:
+		# The message is not too long, so send it as is
+		await channel.send(message, mention_author=False, reference=reference)
+
 @client.event
 async def on_ready():
 	global logger
@@ -97,6 +138,6 @@ async def on_message(message: discord.Message):
 		reply = await asyncio.to_thread(chat.chat, message.clean_content.strip())
 		reply += f"\n\n> `🕒 {chat.runtime:.2f}s // 💸 {'/'.join(map(str, chat.tokens))} (p/c/U) // 🔮 {len(chat.messages)} contexts`"
 
-	await message.channel.send(reply, mention_author=False, reference=message)
+	await send_long_message(message.channel, reply, message)
 
 client.run(os.getenv("DISCORD_TOKEN"), log_handler=intercept_handler)

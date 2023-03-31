@@ -122,6 +122,9 @@ async def on_message(message: discord.Message):
 		if (message.reference.cached_message.author != client.user):
 			return
 
+	if (message.content.startswith("-")):
+		return
+
 	if (len(message.content) < 2):
 		await message.channel.send("> :warning:  Tin nhắn quá ngắn!", mention_author=False, reference=message)
 		return

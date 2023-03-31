@@ -49,17 +49,26 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 chat = ChatBot(os.environ.get("SYSTEM_ROLE"))
+chat_alt = None
+
+if (os.environ.get("SYSTEM_ROLE_ALT")):
+	chat_alt = ChatBot(os.environ.get("SYSTEM_ROLE_ALT"))
+
 client = discord.Client(intents=intents)
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 reset_idle_time = int(os.environ.get("RESET_AFTER_IDLE"))
 
 def check_idle():
-	global chat
+	global chat, chat_alt
 	reset_idle_time = int(os.environ.get("RESET_AFTER_IDLE"))
 
 	while True:
 		if (len(chat.messages) > 1 and time.time() - chat.lastsend > reset_idle_time):
 			chat.reset()
+
+		if (chat_alt):
+			if (len(chat_alt.messages) > 1 and time.time() - chat_alt.lastsend > reset_idle_time):
+				chat_alt.reset()
 
 		time.sleep(2)
 
@@ -69,7 +78,6 @@ async def send_long_message(channel, message, reference):
 
 	# Are we inside a codeblock?
 	codeblock = None
-	sent = False
 	current = ""
 	target = ""
 
@@ -113,7 +121,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-	global chat
+	global chat, chat_alt
 	
 	if (message.author == client.user or message.author.bot):
 		return
@@ -137,9 +145,11 @@ async def on_message(message: discord.Message):
 	if (len(message.content.split(" ")) < 3):
 		chat.reset()
 
+	chat_obj = chat_alt if (message.content.startswith("$") and chat_alt) else chat
+
 	async with message.channel.typing():
-		reply = await asyncio.to_thread(chat.chat, message.clean_content.strip())
-		reply += f"\n\n> `🕒 {chat.runtime:.2f}s // 💸 {'/'.join(map(str, chat.tokens))} (p/c/U) // 🔮 {len(chat.messages)} contexts`"
+		reply = await asyncio.to_thread(chat_obj.chat, message.clean_content.strip("\r\n >*-"))
+		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 💸 {'/'.join(map(str, chat_obj.tokens))} (p/c/U) // 🔮 {len(chat_obj.messages)} contexts`"
 
 	await send_long_message(message.channel, reply, message)
 

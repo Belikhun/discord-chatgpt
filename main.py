@@ -78,6 +78,7 @@ async def send_long_message(channel, message, reference):
 
 	# Are we inside a codeblock?
 	codeblock = None
+	sent = False
 	current = ""
 	target = ""
 
@@ -89,7 +90,7 @@ async def send_long_message(channel, message, reference):
 			target += f"\n{line}" if target != "" else line
 
 			if line.startswith("```"):
-				if codeblock is None:
+				if codeblock == None:
 					codeblock = line
 				else:
 					codeblock = None
@@ -98,6 +99,7 @@ async def send_long_message(channel, message, reference):
 				if (codeblock != None):
 					current += "\n```"
 				
+				sent = True
 				await channel.send(current, mention_author=False, reference=reference)
 				await asyncio.sleep(1)
 
@@ -106,6 +108,9 @@ async def send_long_message(channel, message, reference):
 
 			current = target
 
+		if (sent and codeblock != None):
+			current += f"\n```"
+		
 		# Send the remaining message
 		await channel.send(current, mention_author=False, reference=reference)
 	else:
@@ -122,6 +127,8 @@ async def on_ready():
 @client.event
 async def on_message(message: discord.Message):
 	global chat, chat_alt
+	chat_obj = chat
+	message_content = message.clean_content
 	
 	if (message.author == client.user or message.author.bot):
 		return
@@ -130,25 +137,27 @@ async def on_message(message: discord.Message):
 		if (message.reference.cached_message.author != client.user):
 			return
 
-	if (message.content.startswith("-")):
+	if (message_content.startswith("//") or message_content.startswith("#")):
 		return
 
-	if (len(message.content) < 2):
+	if (len(message_content) < 2):
 		await message.channel.send("> :warning:  Tin nhắn quá ngắn!", mention_author=False, reference=message)
 		return
+	
+	if (message_content.startswith("^") and chat_alt != None):
+		chat_obj = chat_alt
+		message_content = message_content.strip("^")
 
-	if (message.content.startswith("*clear context") or message.content.startswith("*clear history")):
+	if (message_content.startswith("*clear context") or message_content.startswith("*clear history")):
 		chat.reset()
 		await message.channel.send("> :white_check_mark:  Đã loại bỏ lịch sử chat!", mention_author=False, reference=message)
 		return
 	
-	if (len(message.content.split(" ")) < 3):
+	if (len(message_content.split(" ")) < 3):
 		chat.reset()
 
-	chat_obj = chat_alt if (message.content.startswith("^") and chat_alt) else chat
-
 	async with message.channel.typing():
-		reply = await asyncio.to_thread(chat_obj.chat, message.clean_content.strip("\r\n >*-^"))
+		reply = await asyncio.to_thread(chat_obj.chat, message_content.strip("\r\n >*-^"))
 		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 💸 {'/'.join(map(str, chat_obj.tokens))} (p/c/U) // 🔮 {len(chat_obj.messages)} contexts`"
 
 	await send_long_message(message.channel, reply, message)

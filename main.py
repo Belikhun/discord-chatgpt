@@ -149,7 +149,7 @@ async def on_message(message: discord.Message):
 		message_content = message_content.strip("^")
 
 	if (message_content.startswith("*clear context") or message_content.startswith("*clear history")):
-		chat.reset()
+		chat_obj.reset()
 		await message.channel.send("> :white_check_mark:  Đã loại bỏ lịch sử chat!", mention_author=False, reference=message)
 		return
 	

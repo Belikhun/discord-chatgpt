@@ -154,7 +154,7 @@ async def on_message(message: discord.Message):
 		return
 	
 	if (len(message_content.split(" ")) < 3):
-		chat.reset()
+		chat_obj.reset()
 
 	async with message.channel.typing():
 		reply = await asyncio.to_thread(chat_obj.chat, message_content.strip("\r\n >*-^"))

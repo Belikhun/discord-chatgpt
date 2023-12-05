@@ -3,12 +3,20 @@ from lib.log import log
 
 import os
 import discord
-import openai
 import logging
 import time
 import asyncio
 import threading
 from dotenv import load_dotenv
+
+from langchain.callbacks import get_openai_callback
+from langchain.chat_models import ChatOpenAI
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
 
 load_dotenv()
 
@@ -22,24 +30,28 @@ class ChatBot:
 		self.reset()
 
 	def chat(self, message):
-		global logger
+		global logger, openaichat
 		start = time.time()
-		self.messages.append({ "role": "user", "content": message })
+		self.messages.append(HumanMessage(content=message))
 		log("INFO", f"▼ New message: {message}")
-		response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=self.messages)
-		reply = response.choices[0].message.content.strip()
+		
+		with get_openai_callback() as cb:
+			response = openaichat(self.messages)
+			reply = response.content
+			self.tokens = [cb.prompt_tokens, cb.completion_tokens]
+			self.costs = cb.total_cost
+
 		log("OKAY", f"▲ ChatGPT response: {reply}")
-		self.messages.append({ "role": "assistant", "content": reply })
+		self.messages.append(AIMessage(content=reply))
 
 		self.lastsend = time.time()
 		self.runtime = self.lastsend - start
-		self.tokens = [response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens]
 
 		return reply
 	
 	def reset(self):
 		global logger
-		self.messages = [ { "role": "system", "content": self.context } ]
+		self.messages = [ SystemMessage(content=self.context) ]
 		self.lastsend = time.time()
 		log("INFO", f"Context resetted!")
 
@@ -55,7 +67,7 @@ if (os.environ.get("SYSTEM_ROLE_ALT")):
 	chat_alt = ChatBot(os.environ.get("SYSTEM_ROLE_ALT"))
 
 client = discord.Client(intents=intents)
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+openaichat = ChatOpenAI(temperature=0, openai_api_key=os.environ.get("OPENAI_API_KEY"))
 reset_idle_time = int(os.environ.get("RESET_AFTER_IDLE"))
 
 def check_idle():
@@ -158,7 +170,7 @@ async def on_message(message: discord.Message):
 
 	async with message.channel.typing():
 		reply = await asyncio.to_thread(chat_obj.chat, message_content.strip("\r\n >*-^"))
-		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 💸 {'/'.join(map(str, chat_obj.tokens))} (p/c/U) // 🔮 {len(chat_obj.messages)} contexts`"
+		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 📎 {'/'.join(map(str, chat_obj.tokens))} (p/c) // 💸 ${chat_obj.costs} // 🔮 {len(chat_obj.messages)} contexts`"
 
 	await send_long_message(message.channel, reply, message)
 

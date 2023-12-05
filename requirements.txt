@@ -11,6 +11,7 @@ frozenlist
 idna
 multidict
 openai
+langchain
 python-dotenv
 requests
 tqdm

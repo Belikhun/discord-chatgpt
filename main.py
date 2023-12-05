@@ -12,11 +12,6 @@ from dotenv import load_dotenv
 from langchain.callbacks import get_openai_callback
 from langchain.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
 
 load_dotenv()
 
@@ -67,7 +62,12 @@ if (os.environ.get("SYSTEM_ROLE_ALT")):
 	chat_alt = ChatBot(os.environ.get("SYSTEM_ROLE_ALT"))
 
 client = discord.Client(intents=intents)
-openaichat = ChatOpenAI(temperature=0, openai_api_key=os.environ.get("OPENAI_API_KEY"))
+openaichat = ChatOpenAI(
+	model_name=os.environ.get("OPENAI_MODEL"),
+	temperature=1,
+	openai_api_key=os.environ.get("OPENAI_API_KEY")
+)
+
 reset_idle_time = int(os.environ.get("RESET_AFTER_IDLE"))
 
 def check_idle():
@@ -170,7 +170,7 @@ async def on_message(message: discord.Message):
 
 	async with message.channel.typing():
 		reply = await asyncio.to_thread(chat_obj.chat, message_content.strip("\r\n >*-^"))
-		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 📎 {'/'.join(map(str, chat_obj.tokens))} (p/c) // 💸 ${chat_obj.costs} // 🔮 {len(chat_obj.messages)} contexts`"
+		reply += f"\n\n> `🕒 {chat_obj.runtime:.2f}s // 📎 {'/'.join(map(str, chat_obj.tokens))} (p/c) // 💸 ${chat_obj.costs:.5f} // 🔮 {len(chat_obj.messages)} contexts`"
 
 	await send_long_message(message.channel, reply, message)
 

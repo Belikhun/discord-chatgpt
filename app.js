@@ -206,7 +206,7 @@ client.on(Events.MessageCreate, async (message) => {
 		const messageContent = `@${message.author.displayName} said: ${message.content}`;
 		const thinking = THINKING_MESSAGE.replace("{@}", mention(message.author));
 		const response = await message.reply({
-			content: h2(`${emoji("loading", true)} ${bold(thinking)}`)
+			content: h2(`${emoji("responding", true)} ${bold(thinking)}`)
 		});
 
 		currentMessage = response;
@@ -218,7 +218,7 @@ client.on(Events.MessageCreate, async (message) => {
 			let statusBar = "";
 
 			if (!completed)
-				statusBar += `${emoji("loading", true)} `;
+				statusBar += `${emoji("responding", true)} `;
 
 			if (chat.detail.usage) {
 				const tokens = [chat.detail.usage.prompt_tokens, chat.detail.usage.completion_tokens];

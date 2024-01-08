@@ -35,8 +35,8 @@ export function emojiID(name) {
 		case "acdumbbells":
 			return "1177261206873063527";
 		
-		case "loading":
-			return "1193949801801322496";
+		case "responding":
+			return "1193993020685684756";
 	}
 
 	return `0`;

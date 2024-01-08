@@ -9,8 +9,8 @@ A very simple discord bot that reply to user's message. **⚠ Currently it will 
 1. Clone this repository
 2. Copy `.env.example` file to `.env`
 3. Fill in your OpenAI and Discord token
-4. Install requirements by running `pip install -r requirements.txt`
-5. Start the app by running `python main.py`
+4. Install requirements by running `npm i`
+5. Start the app by running `npm start`
 6. Profit!
 
 ## 🚢 Using docker

@@ -2,7 +2,7 @@
 
 ![image](https://github.com/Belikhun/discord-chatgpt/assets/19252372/4090aea9-cd00-49bd-9200-43abcabb12be)
 
-A very simple discord bot that reply to user's message. **⚠ Currently it will listen on all channels it can access so be aware!**
+A very simple discord bot that reply to user's message, with long response support!. **⚠ Currently it will listen on all channels it can access so be aware!**
 
 ## 🛠 Setting up
 

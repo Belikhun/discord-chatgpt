@@ -168,6 +168,15 @@ client.on(Events.MessageCreate, async (message) => {
 	const start = performance.now();
 
 	try {
+		// Pre-process the message content to make sure all placeholders are replaced.
+		let messageContent = `@${message.author.displayName} said: ${message.content}`;
+
+		for (let [id, mention] of message.mentions.users)
+			messageContent = messageContent.replace(`<@${mention.id}>`, `[@${mention.displayName}]`);
+
+		for (let [id, mention] of message.mentions.roles)
+			messageContent = messageContent.replace(`<@&${mention.id}>`, `[#${mention.name}]`);
+
 		if (!channelClient[message.channelId]) {
 			const altChannels = config.get("altRoleChannels");
 			
@@ -203,10 +212,9 @@ client.on(Events.MessageCreate, async (message) => {
 		/** @type {Message} */
 		let currentMessage = null;
 
-		const messageContent = `@${message.author.displayName} said: ${message.content}`;
 		const thinking = THINKING_MESSAGE.replace("{@}", mention(message.author));
 		const response = await message.reply({
-			content: h2(`${emoji("responding", true)} ${bold(thinking)}`)
+			content: h2(`${emoji("loading", true)} ${bold(thinking)}`)
 		});
 
 		currentMessage = response;
@@ -218,7 +226,7 @@ client.on(Events.MessageCreate, async (message) => {
 			let statusBar = "";
 
 			if (!completed)
-				statusBar += `${emoji("responding", true)} `;
+				statusBar += `${emoji("loading", true)} `;
 
 			if (chat.detail.usage) {
 				const tokens = [chat.detail.usage.prompt_tokens, chat.detail.usage.completion_tokens];
@@ -233,7 +241,6 @@ client.on(Events.MessageCreate, async (message) => {
 
 			for (let nth = processingLine; nth < lines.length; nth++) {
 				const line = lines[nth];
-				console.log("processing", line);
 
 				const cnth = nth - currentLineStart;
 				currentLines[cnth] = line;
@@ -317,7 +324,6 @@ client.on(Events.MessageCreate, async (message) => {
 			});
 
 			channelMessages[message.channelId].push(chat);
-			console.log(chat);
 		} else {
 			const chat = await api.sendMessage(messageContent, {
 				parentMessageId: last(channelMessages[message.channelId]).id,
@@ -326,7 +332,6 @@ client.on(Events.MessageCreate, async (message) => {
 			});
 
 			channelMessages[message.channelId].push(chat);
-			console.log(chat);
 		}
 
 		completed = true;

@@ -1,8 +1,8 @@
 import { Collection, Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel } from "discord.js";
 import env from "./env.json" assert { type: "json" };
 import { log, interactive } from "./logger.js";
-import { client } from "./client.js";
-import { bold, code, emoji, formatTime, h2, h3, mention } from "./format.js";
+import { client, getGuild } from "./client.js";
+import { bold, code, emoji, formatTime, h2, h3, lines, mention } from "./format.js";
 import { ChatGPTAPI } from "chatgpt";
 import config from "./config/config.js";
 
@@ -179,21 +179,41 @@ client.on(Events.MessageCreate, async (message) => {
 		? `${message.author.displayName}'s DM`
 		: message.channel.name;
 
+	const displayName = (message.inGuild())
+		? guild.members.cache.get(message.author.id).displayName
+		: message.author.displayName;
+
 	log.debug(`▼ Tin nhắn mới: \"${message.content}\" từ ${channelName} [${message.channelId}] bởi ${message.author.displayName} [${message.author.id}]`);
 	const start = performance.now();
 
 	try {
 		// Pre-process the message content to make sure all placeholders are replaced.
-		let messageContent = `@${message.author.displayName} said: ${message.content}`;
+		let messageContent = `${displayName} (@${message.author.globalName}) said: ${message.content}`;
 
-		for (let [id, mention] of message.mentions.users)
-			messageContent = messageContent.replace(`<@${mention.id}>`, `[@${mention.displayName}]`);
+		for (let [id, mention] of message.mentions.users) {
+			let displayName = (message.inGuild())
+				? guild.members.cache.get(mention.id).displayName
+				: mention.displayName;
+
+			messageContent = messageContent.replace(`<@${mention.id}>`, `[${displayName} (@${mention.globalName})]`);
+		}
 
 		for (let [id, mention] of message.mentions.roles)
 			messageContent = messageContent.replace(`<@&${mention.id}>`, `[#${mention.name}]`);
 
 		if (!channelClient[message.channelId]) {
 			const altChannels = config.get("altRoleChannels");
+			let systemMessage = (altChannels.includes(message.channelId))
+				? SYSTEM_ROLE_ALT
+				: SYSTEM_ROLE;
+
+			systemMessage += lines(
+				"",
+				"Some format you will be expected to receive from messages as a discord bot:",
+				" - Each message will begin by the author's information, with the following format: Name (@GlobalName) said:",
+				" - User mention: [Name (@GlobalName)]",
+				" - Role mention: [#RoleName]"
+			);
 			
 			channelClient[message.channelId] = new ChatGPTAPI({
 				apiKey: OPENAI_API_KEY,
@@ -245,7 +265,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 			if (chat.detail.usage) {
 				const tokens = [chat.detail.usage.prompt_tokens, chat.detail.usage.completion_tokens];
-				statusBar += code(`🕒 ${formatTime(time)}  🤖 ${chat.detail.model}  🪙 ${tokens.join("/")} (p/c)  🔮 ${channelMessages[message.channelId]?.length || 0} contexts`);
+				statusBar += code(`🕒 ${formatTime(time)}  🤖 ${chat.detail.model}  🧧 ${tokens.join("/")} (p/c)  🔮 ${channelMessages[message.channelId]?.length || 0} contexts`);
 				statusBar = h3(statusBar);
 			} else {
 				statusBar += code(`🕒 ${formatTime(time)}  🤖 ${chat.detail.model}  🔮 ${channelMessages[message.channelId]?.length || 0} contexts`);
@@ -375,4 +395,6 @@ client.on(Events.MessageCreate, async (message) => {
 //*  Login to the bot and make it online.
 //* ===========================================================
 
-client.login(DISCORD_TOKEN);
+await client.login(DISCORD_TOKEN);
+
+const guild = await getGuild(GUILD_ID);

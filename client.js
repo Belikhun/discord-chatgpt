@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, User, TextChannel, Partials } from "discord.js";
+import { Client, GatewayIntentBits, User, TextChannel, Partials, Guild } from "discord.js";
 import { log } from "./logger.js";
 
 
@@ -52,6 +52,22 @@ export async function getUser(id) {
 
 	if (!channel)
 		channel = await client.users.fetch(id);
+
+	return channel;
+}
+
+/**
+ * Get discord guild by ID.
+ * Will try to get from cache first. If not exist, fetch from Discord.
+ * 
+ * @param	{String}			id
+ * @returns	{Promise<Guild>}
+ */
+export async function getGuild(id) {
+	let channel = client.guilds.cache.get(id);
+
+	if (!channel)
+		channel = await client.guilds.fetch(id);
 
 	return channel;
 }

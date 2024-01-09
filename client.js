@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, User, TextChannel } from "discord.js";
+import { Client, GatewayIntentBits, User, TextChannel, Partials } from "discord.js";
 import { log } from "./logger.js";
 
 
@@ -11,14 +11,18 @@ import { log } from "./logger.js";
 
 log.debug("Khởi tạo discord client.");
 
-export const client = new Client({ intents: [
-	GatewayIntentBits.Guilds,
-	GatewayIntentBits.GuildMessages,
-	GatewayIntentBits.MessageContent,
-	GatewayIntentBits.DirectMessages,
-	GatewayIntentBits.DirectMessageTyping,
-	GatewayIntentBits.DirectMessageReactions
-]});
+export const client = new Client({
+	intents: [
+		GatewayIntentBits.Guilds,
+		GatewayIntentBits.GuildMessages,
+		GatewayIntentBits.MessageContent,
+		GatewayIntentBits.DirectMessages,
+		GatewayIntentBits.DirectMessageTyping,
+		GatewayIntentBits.DirectMessageReactions
+	],
+
+	partials: [Partials.Channel]
+});
 
 /**
  * Get discord channel by ID.

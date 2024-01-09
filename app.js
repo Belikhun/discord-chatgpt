@@ -1,4 +1,4 @@
-import { Collection, Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message } from "discord.js";
+import { Collection, Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel } from "discord.js";
 import env from "./env.json" assert { type: "json" };
 import { log, interactive } from "./logger.js";
 import { client } from "./client.js";
@@ -164,7 +164,22 @@ client.on(Events.MessageCreate, async (message) => {
 	if (!message.content)
 		return;
 
-	log.debug(`▼ Tin nhắn mới: \"${message.content}\" từ ${message.channelId} bởi ${message.author.displayName} (${message.author.id})`);
+	if (message.content.startsWith("*clear")) {
+		const count = channelMessages[message.channelId]?.length || 0;
+		channelMessages[message.channelId] = null;
+
+		await message.reply({
+			content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`
+		});
+
+		return;
+	}
+
+	const channelName = (message.channel instanceof DMChannel)
+		? `${message.author.displayName}'s DM`
+		: message.channel.name;
+
+	log.debug(`▼ Tin nhắn mới: \"${message.content}\" từ ${channelName} [${message.channelId}] bởi ${message.author.displayName} [${message.author.id}]`);
 	const start = performance.now();
 
 	try {
@@ -192,7 +207,7 @@ client.on(Events.MessageCreate, async (message) => {
 				}
 			});
 
-			log.debug(`Đã tạo API client mới cho kênh ${message.channel.name} (${message.channelId})`);
+			log.debug(`Đã tạo API client mới cho kênh ${channelName} (${message.channelId})`);
 		}
 
 		const api = channelClient[message.channelId];

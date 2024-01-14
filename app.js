@@ -257,7 +257,6 @@ client.on(Events.MessageCreate, async (message) => {
 		const updateMessage = async (/** @type {import("chatgpt").ChatMessage} */ chat) => {
 			updating = true;
 			const time = (performance.now() - start) / 1000;
-			let content = "";
 			let statusBar = "";
 
 			if (!completed)
@@ -312,7 +311,14 @@ client.on(Events.MessageCreate, async (message) => {
 				processingLine = nth;
 			}
 
-			content = currentLines.join("\n");
+			let content = [...currentLines];
+
+			// Check if we have unclosing inline code.
+			const acuteCount = (content[content.length - 1].match(/`/g) || []).length;
+			if (!codeblock && acuteCount % 2 !== 0)
+				content[content.length - 1] += "`";
+
+			content = content.join("\n");
 
 			if (codeblock) {
 				// Add a fake codeblock end here to make sure format is not fcked up.

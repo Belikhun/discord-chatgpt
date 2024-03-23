@@ -217,10 +217,7 @@ client.on(Events.MessageCreate, async (message) => {
 			
 			channelClient[message.channelId] = new ChatGPTAPI({
 				apiKey: OPENAI_API_KEY,
-
-				systemMessage: (altChannels.includes(message.channelId))
-					? SYSTEM_ROLE_ALT
-					: SYSTEM_ROLE,
+				systemMessage,
 				
 				completionParams: {
 					model: (altChannels.includes(message.channelId))

@@ -164,7 +164,7 @@ client.on(Events.MessageCreate, async (message) => {
 	if (!message.content)
 		return;
 
-	if (message.content.startsWith("*clear")) {
+	if (message.content.startsWith("*clear") || message.content.startsWith("/clear")) {
 		const count = channelMessages[message.channelId]?.length || 0;
 		channelMessages[message.channelId] = null;
 
@@ -210,9 +210,11 @@ client.on(Events.MessageCreate, async (message) => {
 			systemMessage += lines(
 				"",
 				"Some format you will be expected to receive from messages as a discord bot:",
-				" - Each message will begin by the author's information, with the following format: Name (@GlobalName) said:",
-				" - User mention: [Name (@GlobalName)]",
-				" - Role mention: [#RoleName]"
+				" - Each message will begin by the author's information, with the following format: DisplayName (@Username) said:",
+				" - User mention: [DisplayName (@Username)]",
+				" - Role mention: [#RoleName]",
+				"",
+				"Use their DisplayName instead of Username when you need to refer to them in message, and @Username when you need to ping them."
 			);
 			
 			channelClient[message.channelId] = new ChatGPTAPI({

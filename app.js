@@ -214,7 +214,8 @@ client.on(Events.MessageCreate, async (message) => {
 				" - User mention: [DisplayName (@Username)]",
 				" - Role mention: [#RoleName]",
 				"",
-				"Use their DisplayName instead of Username when you need to refer to them in message, and @Username when you need to ping them."
+				"Use their DisplayName instead of Username when you need to refer to them in message. Do not show their username when not necessary.",
+				"You can use @Username to alert them when needed."
 			);
 			
 			channelClient[message.channelId] = new ChatGPTAPI({

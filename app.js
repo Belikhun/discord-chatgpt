@@ -6,7 +6,7 @@ import { bold, code, emoji, formatTime, h2, h3, lines, mention } from "./format.
 import { ChatGPTAPI } from "chatgpt";
 import config from "./config/config.js";
 
-const { DISCORD_TOKEN, APP_ID, GUILD_ID, OPENAI_API_KEY, SYSTEM_ROLE, SYSTEM_ROLE_ALT, THINKING_MESSAGE, RESET_AFTER_IDLE, OPENAI_MODEL, APP_NAME, ICON } = env;
+const { DISCORD_TOKEN, APP_ID, GUILD_ID, OPENAI_API_KEY, SYSTEM_ROLE, SYSTEM_ROLE_ALT, THINKING_MESSAGE, RESET_AFTER_IDLE, OPENAI_MODEL, OPENAI_MODEL_ALT, APP_NAME, ICON } = env;
 
 //* ===========================================================
 //*  Define local variables
@@ -217,11 +217,16 @@ client.on(Events.MessageCreate, async (message) => {
 			
 			channelClient[message.channelId] = new ChatGPTAPI({
 				apiKey: OPENAI_API_KEY,
+
 				systemMessage: (altChannels.includes(message.channelId))
 					? SYSTEM_ROLE_ALT
 					: SYSTEM_ROLE,
+				
 				completionParams: {
-					model: OPENAI_MODEL,
+					model: (altChannels.includes(message.channelId))
+						? OPENAI_MODEL_ALT
+						: OPENAI_MODEL,
+					
 					temperature: 1,
 					top_p: 1
 				}

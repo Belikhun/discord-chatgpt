@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, User, TextChannel, Partials, Guild } from "discord.js";
 import { log } from "../logger.js";
 
-import env from "../env.json" assert { type: "json" };
+import env from "../env.json" with { type: "json" };
 const { DISCORD_TOKEN } = env;
 
 //* ===========================================================

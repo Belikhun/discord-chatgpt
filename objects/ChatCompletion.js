@@ -1,10 +1,10 @@
 import { DMChannel, Message } from "discord.js";
 import { bold, code, emoji, formatTime, h3, lines, mention, sh, space, timestampMessage } from "../format.js";
-
-import env from "../env.json" assert { type: "json" };
 import { openAI } from "../clients/openai.js";
 import { scope } from "../logger.js";
 import { ChatConversation } from "./ChatConversation.js";
+
+import env from "../env.json" with { type: "json" };
 const { THINKING_MESSAGE } = env;
 
 const MESSAGE_MAX_LENGTH = 1900;

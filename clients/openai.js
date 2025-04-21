@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-import env from "../env.json" assert { type: "json" };
+import env from "../env.json" with { type: "json" };
 const { OPENAI_API_KEY } = env;
 
 export const openAI = new OpenAI({ apiKey: OPENAI_API_KEY });

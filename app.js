@@ -5,7 +5,7 @@ import { bold, code, emoji } from "./format.js";
 import config from "./config/config.js";
 import { ChatConversation } from "./objects/ChatConversation.js";
 
-import env from "./env.json" assert { type: "json" };
+import env from "./env.json" with { type: "json" };
 import { models } from "./clients/openai.js";
 const { DISCORD_TOKEN, APP_ID, GUILD_ID, APP_NAME, ICON, SYSTEM_ROLE, SYSTEM_ROLE_DEFAULT, MODEL_DEFAULT } = env;
 

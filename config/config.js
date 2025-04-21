@@ -62,17 +62,21 @@ setInterval(() => {
 /**
  * Get config value.
  * 
- * @param	{String}		key			Config key
- * @returns	{String|Array|Object}
+ * @param	{string}					key				Config key
+ * @param	{any}						defaultValue	Default value
+ * @returns	{string|array|object}
  */
-export function get(key) {
+export function get(key, defaultValue = null) {
+	if (typeof config[key] === "undefined")
+		return defaultValue;
+
 	return config[key];
 }
 
 /**
  * Set config value.
  * 
- * @param	{String}		key			Config key
+ * @param	{string}		key			Config key
  * @param	{any}			value		Config value
  */
 export function set(key, value) {

@@ -1,6 +1,8 @@
 import { Client, GatewayIntentBits, User, TextChannel, Partials, Guild } from "discord.js";
-import { log } from "./logger.js";
+import { log } from "../logger.js";
 
+import env from "../env.json" assert { type: "json" };
+const { DISCORD_TOKEN } = env;
 
 //* ===========================================================
 //*  Initialize client
@@ -11,7 +13,7 @@ import { log } from "./logger.js";
 
 log.debug("Khởi tạo discord client.");
 
-export const client = new Client({
+export const discord = new Client({
 	intents: [
 		GatewayIntentBits.Guilds,
 		GatewayIntentBits.GuildMessages,
@@ -24,6 +26,10 @@ export const client = new Client({
 	partials: [Partials.Channel]
 });
 
+export async function authenticateDiscordClient() {
+	await discord.login(DISCORD_TOKEN);
+}
+
 /**
  * Get discord channel by ID.
  * Will try to get from cache first. If not exist, fetch from Discord.
@@ -32,10 +38,10 @@ export const client = new Client({
  * @returns	{Promise<TextChannel>}
  */
 export async function getChannel(id) {
-	let channel = client.channels.cache.get(id);
+	let channel = discord.channels.cache.get(id);
 
 	if (!channel)
-		channel = await client.channels.fetch(id);
+		channel = await discord.channels.fetch(id);
 
 	return channel;
 }
@@ -48,10 +54,10 @@ export async function getChannel(id) {
  * @returns	{Promise<User>}
  */
 export async function getUser(id) {
-	let channel = client.users.cache.get(id);
+	let channel = discord.users.cache.get(id);
 
 	if (!channel)
-		channel = await client.users.fetch(id);
+		channel = await discord.users.fetch(id);
 
 	return channel;
 }
@@ -64,10 +70,15 @@ export async function getUser(id) {
  * @returns	{Promise<Guild>}
  */
 export async function getGuild(id) {
-	let channel = client.guilds.cache.get(id);
+	let channel = discord.guilds.cache.get(id);
 
 	if (!channel)
-		channel = await client.guilds.fetch(id);
+		channel = await discord.guilds.fetch(id);
 
 	return channel;
+}
+
+export default {
+	discord,
+	authenticateDiscordClient
 }

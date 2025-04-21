@@ -37,6 +37,12 @@ export function emojiID(name) {
 		
 		case "loading":
 			return "1193949801801322496";
+
+		case "minecraft_clock":
+			return "1328650986385969152";
+
+		case "resting":
+			return "1363928478109405314";
 	}
 
 	return `0`;
@@ -56,8 +62,8 @@ export function emoji(name, animated = false) {
 /**
  * Make message content bold.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function bold(content) {
 	return `**${content}**`;
@@ -66,8 +72,8 @@ export function bold(content) {
 /**
  * Make message content underline.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function underline(content) {
 	return `__${content}__`;
@@ -76,8 +82,8 @@ export function underline(content) {
 /**
  * Make message content bold.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function italic(content) {
 	return `*${content}`;
@@ -86,18 +92,19 @@ export function italic(content) {
 /**
  * Make message content code.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content
+ * @param	{boolean}	padding
+ * @returns	{string}
  */
-export function code(content) {
-	return `\`${content}\``;
+export function code(content, padding = false) {
+	return (padding) ? `\` ${content} \`` : `\`${content}\``;
 }
 
 /**
  * Make message content heading 1.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function h1(content) {
 	return `# ${content}`;
@@ -106,8 +113,8 @@ export function h1(content) {
 /**
  * Make message content heading 2.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function h2(content) {
 	return `## ${content}`;
@@ -116,18 +123,28 @@ export function h2(content) {
 /**
  * Make message content heading 3.
  * 
- * @param	{String}	content 
- * @returns	{String}
+ * @param	{string}	content 
+ * @returns	{string}
  */
 export function h3(content) {
 	return `### ${content}`;
 }
 
 /**
+ * Make message content sub-heading.
+ * 
+ * @param	{string}	content 
+ * @returns	{string}
+ */
+export function sh(content) {
+	return `-# ${content}`;
+}
+
+/**
  * Multiline message.
  * 
- * @param		{...String}		lines
- * @returns		{String}
+ * @param		{...string}		lines
+ * @returns		{string}
  */
 export function lines(...lines) {
 	return lines
@@ -141,7 +158,7 @@ export function lines(...lines) {
  * @param		{Number}	number 
  * @param		{Object}	options
  * @param		{Boolean}	options.uline
- * @returns		{String}
+ * @returns		{string}
  */
 export function money(number, { uline = false } = {}) {
 	const formatter = new Intl.NumberFormat("vi-VN", {
@@ -158,9 +175,9 @@ export function money(number, { uline = false } = {}) {
 /**
  * Format timestamp to discord date message.
  * 
- * @param	{Number|Date}						date
+ * @param	{number|date}						date
  * @param	{""|"t"|"T"|"d"|"D"|"f"|"F"|"R"}	format		See {@link https://gist.github.com/LeviSnoot/d9147767abeef2f770e9ddcd91eb85aa}
- * @returns	{String}
+ * @returns	{string}
  */
 export function timestampMessage(date, format = "f") {
 	if (date instanceof Date)
@@ -188,7 +205,7 @@ export function trim(string, char) {
  * Parse message content as arguments.
  * 
  * @param	{Message}	message 
- * @returns	{String[]|User[]}
+ * @returns	{string[]|User[]}
  */
 export function parseArguments(message) {
 	const args = [];
@@ -238,8 +255,8 @@ export function parseArguments(message) {
 /**
  * Mention a user.
  * 
- * @param		{String|User}	user
- * @returns		{String}
+ * @param		{string|User}	user
+ * @returns		{string}
  */
 export function mention(user) {
 	if (user instanceof User)

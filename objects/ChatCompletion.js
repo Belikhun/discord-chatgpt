@@ -9,7 +9,7 @@ const { THINKING_MESSAGE } = env;
 
 const MESSAGE_MAX_LENGTH = 1900;
 const INLINE_CODE_RE = /( \`|\` |^`[^`]|`,|`\.|\(`|`\)|[^`\n]`)/gm;
-const CODE_BLOCK_RE = /```([a-zA-Z0-9]*)(?:$|\n)/gm;
+const CODE_BLOCK_RE = /```([a-zA-Z0-9]*)(?:$|\n|\s)/gm;
 
 export class ChatCompletion {
 	/**
@@ -223,28 +223,28 @@ export class ChatCompletion {
 			this.inResponse = true;
 		}
 
-		// Check for codeblock
-		const codeblockMatch = delta.match(CODE_BLOCK_RE);
-		if (codeblockMatch && codeblockMatch[0]) {
-			if (!this.isInCodeblock) {
-				// We just got into a codeblock, raise the flag and store the codeblock
-				// start line.
-				this.codeblockHeader = codeblockMatch[0];
-				this.isInCodeblock = true;
-			} else {
-				this.isInCodeblock = false;
-				this.codeblockHeader = null;
-			}
-		}
+		// // Check for codeblock
+		// const codeblockMatch = delta.match(CODE_BLOCK_RE);
+		// if (codeblockMatch && codeblockMatch[0]) {
+		// 	if (!this.isInCodeblock) {
+		// 		// We just got into a codeblock, raise the flag and store the codeblock
+		// 		// start line.
+		// 		this.codeblockHeader = codeblockMatch[0];
+		// 		this.isInCodeblock = true;
+		// 	} else {
+		// 		this.isInCodeblock = false;
+		// 		this.codeblockHeader = null;
+		// 	}
+		// }
 
-		if (!this.isInCodeblock) {
-			// Check for inline code
-			const ticks = (delta.match(INLINE_CODE_RE) || []).length;
-			if (ticks % 2 == 1) {
-				// Odd number of ticks, flip the inCode flag.
-				this.isInCode = !this.isInCode;
-			}
-		}
+		// if (!this.isInCodeblock) {
+		// 	// Check for inline code
+		// 	const ticks = (delta.match(INLINE_CODE_RE) || []).length;
+		// 	if (ticks % 2 == 1) {
+		// 		// Odd number of ticks, flip the inCode flag.
+		// 		this.isInCode = !this.isInCode;
+		// 	}
+		// }
 
 		const newResponse = this.responseBuffer + delta;
 
@@ -258,7 +258,11 @@ export class ChatCompletion {
 			this.codeblockHeader = split.leftoverInfo.codeblockHeader;
 			this.sendNextMessage = true;
 		} else {
+			const state = this.checkClosingBlocks(newResponse);
 			this.responseBuffer = newResponse;
+			this.isInCode = state.isInCode;
+			this.isInCodeblock = state.isInCodeblock;
+			this.codeblockHeader = state.codeblockHeader;
 		}
 
 		this.deferUpdate();
@@ -406,6 +410,8 @@ export class ChatCompletion {
 			}
 
 			let content = this.responseBuffer;
+			// console.log(this.responseBuffer);
+			// console.log(this.isInCodeblock, this.isInCode);
 
 			if (this.isInCodeblock) {
 				// Close opening codeblock.

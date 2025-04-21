@@ -135,10 +135,12 @@ export class ChatCompletion {
 			};
 		}
 
+		if (this.isReasoningModel() || ["gpt-4o", "gpt-4o-mini"].includes(this.model))
+			options.tools = [ { type: "web_search_preview" } ];
+
 		const response = await openAI.responses.create({
 			model: this.model,
 			instructions: this.conversation.instructions,
-			tools: [ { type: "web_search_preview" } ],
 			input: this.conversation.history,
 			stream: true,
 			...options

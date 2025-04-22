@@ -7,7 +7,7 @@ import { ChatConversation } from "./objects/ChatConversation.js";
 
 import env from "./env.json" with { type: "json" };
 import { models } from "./clients/openai.js";
-const { DISCORD_TOKEN, APP_ID, GUILD_ID, APP_NAME, ICON, SYSTEM_ROLE, SYSTEM_ROLE_DEFAULT, MODEL_DEFAULT } = env;
+const { DISCORD_TOKEN, APP_ID, GUILD_ID, APP_NAME, ICON, SYSTEM_ROLE_CHANNEL, SYSTEM_ROLE_MODEL, SYSTEM_ROLE_CHAT, SYSTEM_ROLE_ASSISTANT, MODEL_DEFAULT } = env;
 
 /** @type {{[channelId: string]: ChatConversation}} */
 const conversations = {};
@@ -30,16 +30,29 @@ const rest = new REST().setToken(DISCORD_TOKEN);
 	const commands = [
 		new SlashCommandBuilder()
 			.setName("clear")
-			.setDescription("Xóa toàn bộ context tin nhắn trong một kênh."),
+			.setDescription("Xóa toàn bộ context tin nhắn trong một kênh"),
 
 		new SlashCommandBuilder()
 			.setName("model")
-			.setDescription("Đặt model sẽ sử dụng cho kênh hiện tại.")
+			.setDescription("Đặt model sẽ sử dụng cho kênh hiện tại")
 			.addStringOption((option) => {
 				return option.setName("model")
 					.setDescription("Tên model hiện tại được hỗ trợ bởi OpenAI")
 					.setRequired(true)
 					.addChoices(...models.map((i) => ({ name: i, value: i })));
+			}),
+
+		new SlashCommandBuilder()
+			.setName("mode")
+			.setDescription("Đặt chế độ trả lời tin nhắn")
+			.addStringOption((option) => {
+				return option.setName("mode")
+					.setDescription("Chế độ phản hồi")
+					.setRequired(true)
+					.addChoices(
+						{ name: "Tin nhắn", value: "chat" },
+						{ name: "Trợ lý", value: "assistant" }
+					);
 			}),
 	];
 
@@ -101,6 +114,17 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				});
 				break;
 			}
+
+			case "mode": {
+				const mode = interaction.options.getString("mode", true);
+				conversations[interaction.channelId] = null;
+				config.set(`mode.${interaction.channelId}`, mode);
+
+				await interaction.reply({
+					content: `${emoji("acinfo")} Chế độ phản hồi cho kênh hiện tại được đặt thành ${code(mode)}!`
+				});
+				break;
+			}
 		
 			default: {
 				log.error(`Không tìm thấy câu lệnh ${interaction.commandName}.`);
@@ -156,12 +180,20 @@ discord.on(Events.MessageCreate, async (message) => {
 	try {
 		if (!conversations[message.channelId]) {
 			const model = config.get(`model.${message.channelId}`, MODEL_DEFAULT);
+			const mode = config.get(`mode.${message.channelId}`, "chat");
 
-			let instructions = (typeof SYSTEM_ROLE[model] !== "undefined")
-				? SYSTEM_ROLE[model]
-				: SYSTEM_ROLE_DEFAULT;
+			let instructions;
+			if (typeof SYSTEM_ROLE_CHANNEL[model] !== "undefined") {
+				instructions = SYSTEM_ROLE_CHANNEL[model];
+			} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
+				instructions = SYSTEM_ROLE_MODEL[model];
+			} else {
+				instructions = (mode === "chat")
+					? SYSTEM_ROLE_CHAT
+					: SYSTEM_ROLE_ASSISTANT;
+			}
 
-			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions);
+			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions, mode);
 		}
 
 		await conversations[message.channelId].handle(message);

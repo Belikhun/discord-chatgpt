@@ -108,7 +108,7 @@ export class ChatCompletion {
 		const content = [];
 
 		if (this.originalMessage.content.length > 0)
-			content.push({ type: "input_text", text: this.conversation.processMessage(this.originalMessage) });
+			content.push({ type: "input_text", text: await this.conversation.processMessage(this.originalMessage) });
 
 		for (const attachment of this.originalMessage.attachments.values()) {
 			if (attachment.contentType.startsWith("image")) {

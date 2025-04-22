@@ -174,7 +174,7 @@ export class ChatCompletion {
 					this.conversation.history.push(...output);
 					this.completed = true;
 					this.deferUpdate();
-					this.log.okay(`Chat completed. Runtime ${formatTime(this.runtime)}`);
+					this.log.success(`Chat completed. Runtime ${formatTime(this.runtime)}`);
 					break;
 				}
 

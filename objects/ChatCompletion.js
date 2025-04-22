@@ -169,15 +169,12 @@ export class ChatCompletion {
 					break;
 				}
 
-				case "response.output_text.done": {
-					this.completed = true;
-					this.deferUpdate();
-					break;
-				}
-
 				case "response.completed": {
 					const { output } = event.response;
 					this.conversation.history.push(...output);
+					this.completed = true;
+					this.deferUpdate();
+					this.log.okay(`Chat completed. Runtime ${formatTime(this.runtime)}`);
 					break;
 				}
 

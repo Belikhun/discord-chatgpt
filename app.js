@@ -180,7 +180,7 @@ discord.on(Events.MessageCreate, async (message) => {
 	try {
 		if (!conversations[message.channelId]) {
 			const model = config.get(`model.${message.channelId}`, MODEL_DEFAULT);
-			const mode = config.get(`mode.${message.channelId}`, "chat");
+			const mode = config.get(`mode.${message.channelId}`, (message.channel instanceof DMChannel) ? "assistant" : "chat");
 
 			let instructions;
 			if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {

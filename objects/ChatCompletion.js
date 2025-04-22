@@ -172,16 +172,12 @@ export class ChatCompletion {
 				case "response.output_text.done": {
 					this.completed = true;
 					this.deferUpdate();
-					
 					break;
 				}
 
-				case "response.output_text.done": {
-					this.conversation.history.push({
-						role: "assistant",
-						content: event.text
-					});
-
+				case "response.completed": {
+					const { output } = event.response;
+					this.conversation.history.push(...output);
 					break;
 				}
 

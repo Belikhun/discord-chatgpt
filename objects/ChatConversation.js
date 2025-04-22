@@ -99,9 +99,6 @@ export class ChatConversation {
 			};
 		}
 
-		if (this.isReasoningModel() || ["gpt-4o", "gpt-4o-mini"].includes(this.model))
-			options.tools = [ { type: "web_search_preview" } ];
-
 		const { output, output_text } = await openAI.responses.create({
 			model: this.model,
 			instructions: this.instructions,

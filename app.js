@@ -183,8 +183,8 @@ discord.on(Events.MessageCreate, async (message) => {
 			const mode = config.get(`mode.${message.channelId}`, "chat");
 
 			let instructions;
-			if (typeof SYSTEM_ROLE_CHANNEL[model] !== "undefined") {
-				instructions = SYSTEM_ROLE_CHANNEL[model];
+			if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {
+				instructions = SYSTEM_ROLE_CHANNEL[message.channelId];
 			} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
 				instructions = SYSTEM_ROLE_MODEL[model];
 			} else {

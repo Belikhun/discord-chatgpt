@@ -7,7 +7,7 @@ import { ChatConversation } from "./ChatConversation.js";
 import env from "../env.json" with { type: "json" };
 const { THINKING_MESSAGE } = env;
 
-const MESSAGE_MAX_LENGTH = 1900;
+const MESSAGE_MAX_LENGTH = 1800;
 const INLINE_CODE_RE = /( \`|\` |^`[^`]|`,|`\.|\(`|`\)|[^`\n]`)/gm;
 const CODE_BLOCK_RE = /```([a-zA-Z0-9]*)(?:$|\n|\s)/gm;
 

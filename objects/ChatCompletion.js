@@ -135,7 +135,7 @@ export class ChatCompletion {
 			};
 		}
 
-		if (["o4-mini", "o3", "o3-mini", "gpt-4o", "gpt-4o-mini"].includes(this.model))
+		if (["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"].includes(this.model))
 			options.tools = [ { type: "web_search_preview" } ];
 
 		const response = await openAI.responses.create({

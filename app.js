@@ -5,8 +5,8 @@ import { bold, code, emoji } from "./format.js";
 import config from "./config/config.js";
 import { ChatConversation } from "./objects/ChatConversation.js";
 
-import env from "./env.json" with { type: "json" };
 import { models } from "./clients/openai.js";
+import env from "./env.json" with { type: "json" };
 const { DISCORD_TOKEN, APP_ID, GUILD_ID, APP_NAME, ICON, SYSTEM_ROLE_CHANNEL, SYSTEM_ROLE_MODEL, SYSTEM_ROLE_CHAT, SYSTEM_ROLE_ASSISTANT, MODEL_DEFAULT } = env;
 
 /** @type {{[channelId: string]: ChatConversation}} */

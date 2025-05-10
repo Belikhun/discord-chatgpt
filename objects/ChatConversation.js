@@ -4,6 +4,7 @@ import { lines } from "../format.js";
 import { scope } from "../logger.js";
 import { openAI } from "../clients/openai.js";
 import { discord } from "../clients/discord.js";
+import { any } from "../utils.js";
 
 /**
  * @typedef {DMChannel | NewsChannel | StageChannel | TextChannel | VoiceChannel} ConversationChannel
@@ -25,22 +26,30 @@ export class ChatConversation {
 		this.instructions = instructions.replaceAll("{@}", discord.user.username);
 		this.log = scope(`conversation:${this.channel.id}`);
 
+		/** @type {string[]} */
+		this.conversationWakeupKeywords = [];
+
 		this.instructions += lines(
 			"",
-			"All incoming messages will follow this strict format:",
-			"  ${user.name} (${user.username}) <@${user.id}>:",
-			"  (optional) [replying to ${reply.name} (${reply.username}) <@${reply.id}>]",
-			"  ${message}",
+			"## The following instructions will explain the structure and format for incomming messages",
+			"All variables will be enclosed between curly brackets (example: {variable})",
 			"",
-			"Additional elements you may encounter in messages:",
-			" - User mentions will appear as: [${user.name} (${user.username}) <@${user.id}>]",
-			" - Role mentions will appear as: [#${role.name} <@&${role.id}>]",
+			"### All incoming messages will follow this strict format:",
+			"Channel: #{channel.name}",
+			"User: {user.name} ({user.username}) <@{user.id}>",
+			"(optional) Replying to: {reply.name} ({reply.username}) <@{reply.id}>",
+			"Message content:",
+			"{message}",
 			"",
-			"Important rules to follow:",
-			" - When replying to or referring to a user, always use the format: <@${user.id}>.",
-			" - When mentioning a role, always use the format: <@&${role.id}>.",
+			"### Additional elements you may encounter in messages:",
+			" - User mentions will appear as: [{user.name} ({user.username}) <@{user.id}>]",
+			" - Role mentions will appear as: [role {role.name} <@&{role.id}>]",
 			"",
-			"Interpretation Guidelines:",
+			"### Important rules to follow:",
+			" - When replying to or referring to a user, always use the format: <@{user.id}>.",
+			" - When mentioning a role, always use the format: <@&{role.id}>.",
+			"",
+			"### Interpretation Guidelines:",
 			" - Treat tags like [Name (Username) <@id>] or [#Role <@&id>] as *references only* — do not attempt to interpret their meaning or generate extra context.",
 			" - Do not guess or invent user names, roles, or identities that are not explicitly provided in the message content.",
 			" - Stick strictly to the formats defined above. Do not introduce new formats or alter the structure.",
@@ -90,6 +99,15 @@ export class ChatConversation {
 			content
 		});
 
+		const shouldProcess = message.mentions.users.has(discord.user.id)
+			|| any(this.conversationWakeupKeywords, (keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
+			|| message.reference ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false;
+
+		if (!shouldProcess) {
+			this.log.info(`Message added to history, will not process this message.`);
+			return this;
+		}
+
 		const options = {};
 
 		if (this.isReasoningModel()) {
@@ -132,11 +150,14 @@ export class ChatConversation {
 		const displayName = author.displayName || author.username;
 
 		// Start with sender format
-		let messageHeader = `${displayName} (${author.username}) <@${author.id}>`;
+		let messageHeader = lines(
+			`Channel: #${message.channel.name}`,
+			`User: ${displayName} (${author.username}) <@${author.id}>`
+		);
 
 		if (message.reference && message.reference.messageId) {
 			const ref = await this.channel.messages.fetch(message.reference.messageId);
-			messageHeader += `\n[replying to ${ref.author.displayName} (${ref.author.username}) <@${ref.author.id}>]`;
+			messageHeader += `\nReplying to: ${ref.author.displayName} (${ref.author.username}) <@${ref.author.id}>]`;
 		}
 
 		let messageContent = content;
@@ -152,10 +173,14 @@ export class ChatConversation {
 		// Replace role mentions with expanded format
 		for (let [id, role] of mentions.roles) {
 			const mentionRegex = new RegExp(`<@&${role.id}>`, 'g');
-			const replacement = `[#${role.name} <@&${role.id}>]`;
+			const replacement = `[role ${role.name} <@&${role.id}>]`;
 			messageContent = messageContent.replace(mentionRegex, replacement);
 		}
 
-		return `${messageHeader}\n${messageContent}`;
+		return lines(
+			messageHeader,
+			`Message content:`,
+			messageContent
+		);
 	}
 }

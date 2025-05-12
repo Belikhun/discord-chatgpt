@@ -105,7 +105,7 @@ export class ChatConversation {
 		const shouldProcess = (this.skippedMessages >= 4)
 			|| message.mentions.users.has(discord.user.id)
 			|| any(this.conversationWakeupKeywords, (keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
-			|| message.reference ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false;
+			|| (message.reference && message.reference.messageId) ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false;
 
 		if (!shouldProcess) {
 			this.log.info(`Message added to history, will not process this message.`);

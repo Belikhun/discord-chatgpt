@@ -33,9 +33,9 @@ export class ChatConversation {
 		this.instructions += lines(
 			"",
 			"The following instructions define the structure and format of incoming messages.",
-			"Understanding this structure will help you accurately interpret message context.",
+			"Understanding this structure will help you accurately interpret user's message context.",
 			"All variables are enclosed in curly brackets (e.g., {variable}).",
-			"DO NOT USE THIS FORMAT IN YOUR RESPONSES!",
+			"ONLY REPLY WITH YOUR MESSAGE, DO NOT APPLY THE FOLLOWING FORMAT TO YOUR RESPONSE MESSAGE!",
 			"",
 			"### Incoming Message Format:",
 			"Channel: #{channel.name}",
@@ -55,7 +55,8 @@ export class ChatConversation {
 			"### Interpretation Guidelines:",
 			" - Treat all tags such as [Name (Username) <@id>] or [#Role <@&id>] as references only — do not infer meaning or context.",
 			" - Do not guess, invent, or assume any names, roles, or identities not explicitly stated.",
-			" - Follow the formats above strictly. Do not create or use alternative formats.",
+			" - Follow the parsing formats above strictly. Do not create or use alternative formats.",
+			" - Do not apply the incoming message format to your response message."
 		);
 
 		/** @type {import("openai/resources/responses/responses.mjs").ResponseInput} */

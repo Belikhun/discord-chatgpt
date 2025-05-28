@@ -98,6 +98,10 @@ export class ChatConversation {
 			}
 		}
 
+		// Empty message, we prob don't want to process this.
+		if (content.length == 0)
+			return this;
+
 		this.history.push({
 			role: "user",
 			content

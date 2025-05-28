@@ -15,7 +15,8 @@ USER node
 # install dependencies first, in a different location for easier app bind mounting for local development
 # WORKDIR now sets correct permissions if you set USER first
 WORKDIR /usr/src/app
-COPY . .
+COPY package.json package.json
 RUN npm i
+COPY . .
 
 CMD [ "npm", "start" ]

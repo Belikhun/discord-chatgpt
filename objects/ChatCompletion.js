@@ -123,7 +123,8 @@ export class ChatCompletion {
 
 		this.conversation.history.push({
 			role: "user",
-			content
+			content,
+			timestamp: Date.now()
 		});
 
 		const options = {};
@@ -141,7 +142,7 @@ export class ChatCompletion {
 		const response = await openAI.responses.create({
 			model: this.model,
 			instructions: this.conversation.instructions,
-			input: this.conversation.history,
+			input: this.conversation.history.map(({ role, content }) => ({ role, content })),
 			stream: true,
 			...options
 		});
@@ -171,7 +172,11 @@ export class ChatCompletion {
 
 				case "response.completed": {
 					const { output } = event.response;
-					this.conversation.history.push(...output);
+					this.conversation.history.push(...output.map((item) => {
+						item.timestamp = Date.now();
+						return item;
+					}));
+
 					this.completed = true;
 					this.deferUpdate();
 					this.log.success(`Chat completed. Runtime ${formatTime(this.runtime)}`);

@@ -75,6 +75,9 @@ export class ChatConversation {
 	 * @param	{Message<boolean>}	message
 	 */
 	async handle(message) {
+		// Filter history that had been more than 1 day.
+		this.history = this.history.filter(({ timestamp }) => ((Date.now() - timestamp) < 86400000));
+
 		if (this.mode === "assistant") {
 			const chat = new ChatCompletion(this, message, this.model);
 			await chat.start();
@@ -104,7 +107,8 @@ export class ChatConversation {
 
 		this.history.push({
 			role: "user",
-			content
+			content,
+			timestamp: Date.now()
 		});
 
 		const shouldProcess = (this.skippedMessages >= 4)
@@ -131,12 +135,19 @@ export class ChatConversation {
 		const { output, output_text } = await openAI.responses.create({
 			model: this.model,
 			instructions: this.instructions,
-			input: this.history,
+			input: this.history.map((item) => {
+				const i = { ...item }
+				delete i.timestamp;
+				return i;
+			}),
 			...options
 		});
 
 		this.log.info(`Got chat response: ${output_text}`);
-		this.history.push(...output);
+		this.history.push(...output.map((item) => {
+			item.timestamp = Date.now();
+			return item;
+		}));
 
 		if (output_text.trim() !== "[skip]" && output_text.trim() !== "`[skip]`" && !output_text.startsWith("[skip]")) {
 			await this.channel.send({

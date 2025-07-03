@@ -7,7 +7,19 @@ import { ChatConversation } from "./objects/ChatConversation.js";
 
 import { models } from "./clients/openai.js";
 import env from "./env.json" with { type: "json" };
-const { DISCORD_TOKEN, APP_ID, GUILD_ID, APP_NAME, ICON, SYSTEM_ROLE_CHANNEL, SYSTEM_ROLE_MODEL, SYSTEM_ROLE_CHAT, SYSTEM_ROLE_ASSISTANT, MODEL_DEFAULT } = env;
+const {
+	DISCORD_TOKEN,
+	APP_ID,
+	GUILD_ID,
+	APP_NAME,
+	ICON,
+	WAKEUP_KEYWORDS,
+	SYSTEM_ROLE_CHANNEL,
+	SYSTEM_ROLE_MODEL,
+	SYSTEM_ROLE_CHAT,
+	SYSTEM_ROLE_ASSISTANT,
+	MODEL_DEFAULT
+} = env;
 
 /** @type {{[channelId: string]: ChatConversation}} */
 const conversations = {};
@@ -194,6 +206,7 @@ discord.on(Events.MessageCreate, async (message) => {
 			}
 
 			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions, mode);
+			conversations[message.channelId].conversationWakeupKeywords = WAKEUP_KEYWORDS;
 		}
 
 		await conversations[message.channelId].handle(message);

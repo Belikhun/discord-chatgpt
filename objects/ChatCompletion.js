@@ -1,15 +1,18 @@
-import { DMChannel, Message } from "discord.js";
+import { AttachmentBuilder, DMChannel, MediaGalleryBuilder, Message, MessageFlags, TextDisplayBuilder } from "discord.js";
 import { bold, code, emoji, formatTime, h3, lines, mention, sh, space, timestampMessage } from "../format.js";
-import { openAI } from "../clients/openai.js";
+import { supportSearch, openAI, supportImageGeneration } from "../clients/openai.js";
 import { scope } from "../logger.js";
 import { ChatConversation } from "./ChatConversation.js";
+import fs from "node:fs";
 
 import env from "../env.json" with { type: "json" };
-const { THINKING_MESSAGE } = env;
+const { THINKING_MESSAGE, IMAGE_GENERATING_MESSAGE } = env;
 
 const MESSAGE_MAX_LENGTH = 1800;
 const INLINE_CODE_RE = /( \`|\` |^`[^`]|`,|`\.|\(`|`\)|[^`\n]`)/gm;
 const CODE_BLOCK_RE = /```([a-zA-Z0-9]*)(?:$|\n|\s)/gm;
+
+const GENERATING_PLACEHOLDER = fs.readFileSync("./assets/generating_placeholder.gif");
 
 export class ChatCompletion {
 	/**
@@ -52,6 +55,21 @@ export class ChatCompletion {
 		this.responseIndex = 0;
 		this.sendNextMessage = false;
 
+		/** @type {false | "inprogress" | "generating" | "partial" | "completed"} */
+		this.imageGeneration = false;
+
+		/** @type {{[index: string]: { url: string, content_type: string }}} */
+		this.images = {};
+
+		/** @type {{[index: string]: AttachmentBuilder}} */
+		this.files = {};
+
+		/** @type {string[]} */
+		this.generationPrompt = [];
+
+		/** @type {MediaGalleryBuilder} */
+		this.gallery = null;
+
 		this.completed = false;
 	}
 
@@ -60,7 +78,12 @@ export class ChatCompletion {
 	}
 
 	thinkingMessage() {
-		const thinking = THINKING_MESSAGE.replace("{@}", mention(this.author));
+		if (!this.thinkingMessageComponent)
+			this.thinkingMessageComponent = new TextDisplayBuilder();
+
+		const thinking = (this.imageGeneration)
+			? IMAGE_GENERATING_MESSAGE.replace("{@}", mention(this.author))
+			: THINKING_MESSAGE.replace("{@}", mention(this.author));
 
 		const lines = [
 			`### ${code(this.model, true)} ${space()}${emoji("minecraft_clock", true)} ${timestampMessage(this.startDate, "R")}`,
@@ -81,7 +104,7 @@ export class ChatCompletion {
 			lines.push(sh(`> ${thought}`));
 		}
 
-		return lines.join("\n");
+		return this.thinkingMessageComponent.setContent(lines.join("\n"));
 	}
 
 	footer() {
@@ -95,6 +118,33 @@ export class ChatCompletion {
 		return (this.model.match(/^o(\d{1})/gm) != null);
 	}
 
+	prepareImageIndex(index) {
+		const attachment = new AttachmentBuilder(GENERATING_PLACEHOLDER, {
+			name: `generated${index}.gif`
+		});
+
+		this.files[`g${index}`] = attachment;
+		this.images[`g${index}`] = {
+			url: `attachment://generated${index}.gif`,
+			content_type: "image/gif"
+		};
+
+		return attachment;
+	}
+
+	updateImageIndex(index, imageBase64, { size, format } = {}) {
+		const attachment = this.files[`g${index}`];
+		const image = this.images[`g${index}`];
+
+		const buffer = Buffer.from(imageBase64, "base64");
+
+		attachment.setFile(buffer, `generated${index}.${format}`);
+		attachment.setName(`generated${index}.${format}`);
+		image.url = `attachment://generated${index}.${format}`;
+		image.content_type = `image/${format}`;
+		return attachment;
+	}
+
 	async start() {
 		this.startTime = performance.now();
 		this.startDate = new Date();
@@ -102,7 +152,8 @@ export class ChatCompletion {
 		this.originalMessage.channel.sendTyping();
 
 		this.thinkingReply = await this.originalMessage.reply({
-			content: this.thinkingMessage()
+			flags: MessageFlags.IsComponentsV2,
+			components: [this.thinkingMessage()]
 		});
 
 		const content = [];
@@ -127,7 +178,7 @@ export class ChatCompletion {
 			timestamp: Date.now()
 		});
 
-		const options = {};
+		const options = { tools: [] };
 
 		if (this.isReasoningModel()) {
 			options.reasoning = {
@@ -136,13 +187,20 @@ export class ChatCompletion {
 			};
 		}
 
-		if (["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"].includes(this.model))
-			options.tools = [ { type: "web_search_preview" } ];
+		if (supportSearch.includes(this.model))
+			options.tools.push({ type: "web_search_preview" });
+
+		if (supportImageGeneration.includes(this.model))
+			options.tools.push({ type: "image_generation" });
 
 		const response = await openAI.responses.create({
 			model: this.model,
 			instructions: this.conversation.instructions,
-			input: this.conversation.history.map(({ role, content }) => ({ role, content })),
+			input: this.conversation.history.map((item) => {
+				const i = { ...item }
+				delete i.timestamp;
+				return i;
+			}),
 			stream: true,
 			...options
 		});
@@ -170,6 +228,49 @@ export class ChatCompletion {
 					break;
 				}
 
+				case "response.image_generation_call.in_progress": {
+					this.imageGeneration = "inprogress";
+					this.log.info(`Started generating image... [${event.output_index}]`);
+					this.prepareImageIndex(event.output_index);
+					this.deferUpdate();
+					break;
+				}
+
+				case "response.image_generation_call.generating": {
+					this.imageGeneration = "generating";
+					this.log.info(`Image generation in progress... [${event.output_index}]`);
+					this.deferUpdate();
+					break;
+				}
+
+				case "response.image_generation_call.partial_image": {
+					this.imageGeneration = "partial";
+					this.updateImageIndex(event.output_index, event.partial_image_b64, {
+						size: event.size,
+						format: event.output_format
+					});
+
+					this.deferUpdate();
+					break;
+				}
+
+				case "response.output_item.done": {
+					if (event.item.type == "image_generation_call") {
+						this.imageGeneration = "completed";
+						this.updateImageIndex(event.output_index, event.item.result, {
+							size: event.item.size,
+							format: event.item.output_format
+						});
+
+						this.generationPrompt.push(event.item.revised_prompt);
+						this.handleOutput(sh(`> ${event.item.revised_prompt}`));
+						this.log.info(`Image generation completed [${event.output_index}]`);
+						this.deferUpdate();
+					}
+
+					break;
+				}
+
 				case "response.completed": {
 					const { output } = event.response;
 					this.conversation.history.push(...output.map((item) => {
@@ -184,6 +285,7 @@ export class ChatCompletion {
 				}
 
 				default:
+					this.log.debug(event);
 					break;
 			}
 		}
@@ -392,14 +494,46 @@ export class ChatCompletion {
 		this.updating = true;
 		this.log.info(`Pushing update to discord...`);
 
+		const components = [];
+		let files = [];
+
+		if (this.imageGeneration && this.responseIndex == 0) {
+			if (!this.gallery) {
+				this.gallery = new MediaGalleryBuilder();
+			} else {
+				this.gallery.spliceItems(0, this.gallery.items.length);
+			}
+
+			for (const image of Object.values(this.images)) {
+				this.gallery.addItems({
+					media: image
+				});
+			}
+
+			components.push(this.gallery);
+			files = Object.values(this.files);
+		}
+
 		if (!this.inResponse) {
+			components.push(this.thinkingMessage());
+
 			await this.thinkingReply.edit({
-				content: this.thinkingMessage()
+				flags: MessageFlags.IsComponentsV2,
+				components,
+				files
 			});
 		} else {
+			const textContent = new TextDisplayBuilder();
+			components.push(textContent);
+
+			if (this.responses[this.responseIndex])
+				textContent.setContent(this.responses[this.responseIndex]);
+
 			if (this.sendNextMessage) {
 				this.currentResponse.edit({
-					content: this.responses[this.responseIndex]
+					flags: MessageFlags.IsComponentsV2,
+					components,
+					files
 				});
 
 				this.responseIndex += 1;
@@ -408,31 +542,30 @@ export class ChatCompletion {
 			}
 
 			let content = this.responseBuffer;
-			// console.log(this.responseBuffer);
-			// console.log(this.isInCodeblock, this.isInCode);
 
 			if (this.isInCodeblock) {
 				// Close opening codeblock.
 				content += `\n\`\`\``;
 			} else if (this.isInCode) {
+				// Close opening inline code.
 				content += `\``;
 			}
 
+			textContent.setContent(content);
+			const footer = new TextDisplayBuilder().setContent(this.footer());
+			components.push(footer);
+
 			if (!this.currentResponse) {
 				this.currentResponse = await this.originalMessage.channel.send({
-					content: lines(
-						content,
-						"",
-						this.footer()
-					)
+					flags: MessageFlags.IsComponentsV2,
+					components,
+					files
 				});
 			} else {
 				await this.currentResponse.edit({
-					content: lines(
-						content,
-						"",
-						this.footer()
-					)
+					flags: MessageFlags.IsComponentsV2,
+					components,
+					files
 				});
 			}
 		}

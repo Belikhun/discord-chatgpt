@@ -2,7 +2,7 @@
 
 ![image](https://github.com/user-attachments/assets/3d2dab83-708e-49fa-900f-f5f1a7909569)
 
-A very simple discord bot that reply to user's message, with long response support!. **⚠ Currently it will listen on all channels it can access so be aware!**
+A very simple discord bot that reply to user's message, with long response support and image generation!. **⚠ Currently it will listen on all channels it can access so be aware!**
 
 ## 🛠 Setting up
 

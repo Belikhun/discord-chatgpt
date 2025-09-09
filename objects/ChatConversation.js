@@ -29,6 +29,7 @@ export class ChatConversation {
 		/** @type {string[]} */
 		this.conversationWakeupKeywords = [];
 		this.skippedMessages = 0;
+		this.chatActivated = false;
 
 		this.instructions += lines(
 			"",
@@ -111,7 +112,8 @@ export class ChatConversation {
 			timestamp: Date.now()
 		});
 
-		const shouldProcess = (this.skippedMessages >= 4)
+		const shouldProcess = (this.chatActivated)
+			|| (this.skippedMessages >= 4)
 			|| message.mentions.users.has(discord.user.id)
 			|| any(this.conversationWakeupKeywords, (keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
 			|| ((message.reference && message.reference.messageId) ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false);
@@ -150,9 +152,13 @@ export class ChatConversation {
 		}));
 
 		if (output_text.trim() !== "[skip]" && output_text.trim() !== "`[skip]`" && !output_text.startsWith("[skip]")) {
+			this.chatActivated = true;
+
 			await this.channel.send({
 				content: output_text
 			});
+		} else {
+			this.chatActivated = false;
 		}
 
 		return this;

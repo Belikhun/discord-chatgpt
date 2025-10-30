@@ -166,7 +166,9 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 });
 
 discord.on(Events.MessageCreate, async (message) => {
-	if (message.author.bot)
+	// if (message.author.bot)
+	// 	return;
+	if (message.author.id === discord.user.id)
 		return;
 
 	if (!message.content && !message.attachments.size)

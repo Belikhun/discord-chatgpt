@@ -35,6 +35,7 @@ export class ChatConversation {
 		/** @type {string[]} */
 		this.conversationWakeupKeywords = [];
 		this.skippedMessages = 0;
+		this.skipStreak = 0;
 		this.chatActivated = false;
 
 		this.instructions += "\n" + lines(
@@ -119,8 +120,9 @@ export class ChatConversation {
 			timestamp: Date.now()
 		});
 
+		const skipThreshold = (this.skipStreak <= 1) ? 1 : 4;
 		const shouldProcess = (this.chatActivated)
-			|| (this.skippedMessages >= 4)
+			|| (this.skippedMessages >= skipThreshold)
 			|| message.mentions.users.has(discord.user.id)
 			|| any(this.conversationWakeupKeywords, (keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
 			|| ((message.reference && message.reference.messageId) ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false);
@@ -160,12 +162,15 @@ export class ChatConversation {
 
 		if (output_text.trim() !== "[skip]" && output_text.trim() !== "`[skip]`" && !output_text.startsWith("[skip]")) {
 			this.chatActivated = true;
+			this.skipStreak = 0;
 
 			await this.channel.send({
 				content: output_text
 			});
 		} else {
 			this.chatActivated = false;
+			this.skipStreak += 1;
+			this.log.info(`Response was [skip], not sending message.`);
 		}
 
 		return this;

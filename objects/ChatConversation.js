@@ -4,7 +4,7 @@ import { lines } from "../format.js";
 import { scope } from "../logger.js";
 import { openAI } from "../clients/openai.js";
 import { discord } from "../clients/discord.js";
-import { any } from "../utils.js";
+import { ALL_EMOJIS, any } from "../utils.js";
 
 /**
  * @typedef {DMChannel | NewsChannel | StageChannel | TextChannel | VoiceChannel} ConversationChannel
@@ -23,7 +23,7 @@ export class ChatConversation {
 		this.channel = channel;
 		this.model = model;
 		this.mode = mode;
-		this.instructions = instructions.replaceAll("{@}", discord.user.username);
+		this.instructions = instructions.replaceAll("{@}", discord.user?.username || "");
 		this.log = scope(`conversation:${this.channel.id}`);
 
 		/** @type {string[]} */
@@ -31,33 +31,34 @@ export class ChatConversation {
 		this.skippedMessages = 0;
 		this.chatActivated = false;
 
-		this.instructions += lines(
+		this.instructions += "\n" + lines(
+			"All messages come as structured JSON objects representing Discord messages.",
+			"Interpret them as chat input — respond naturally in plain text following Discord conventions.",
 			"",
-			"The following instructions define the structure and format of incoming messages.",
-			"Understanding this structure will help you accurately interpret user's message context.",
-			"All variables are enclosed in curly brackets (e.g., {variable}).",
-			"ONLY REPLY WITH YOUR MESSAGE, DO NOT APPLY THE FOLLOWING FORMAT TO YOUR RESPONSE MESSAGE!",
+			"Schema:",
+			'{ "currentChannel": { "id": string, "name": string },',
+			'  "messageAuthor": { "id": string, "username": string, "displayName": string },',
+			'  "replyingTo"?: { "id": string, "username": string, "displayName": string },',
+			'  "message": string }',
 			"",
-			"### Incoming Message Format:",
-			"Channel: #{channel.name}",
-			"User: {user.name} ({user.username}) <@{user.id}>",
-			"(optional) Replying to: {reply.name} ({reply.username}) <@{reply.id}>",
-			"Message content:",
-			"{message}",
+			"Discord formatting rules:",
+			" - User mention: <@{user.id}>",
+			" - Role mention: <@&{role.id}>",
+			" - Channel mention: <#{channel.id}>",
+			" - Markdown: *italic*, **bold**, `code`, ```blocks```",
+			" - Timestamps: <t:unix[:style]>",
+			" - Emojis: :emoji_name: or Unicode emoji",
 			"",
-			"### Additional Elements You May Encounter:",
-			" - User mentions: [{user.name} ({user.username}) <@{user.id}>]",
-			" - Role mentions: [role {role.name} <@&{role.id}>]",
+			"Rules:",
+			" - Reply in plain text only — no JSON or structural output.",
+			" - Never echo or restate the input JSON.",
+			" - Use only IDs provided; don't invent users, roles, or channels.",
+			" - The `message` field is the user's actual text; `replyingTo` gives reply context.",
 			"",
-			"### Rules to Follow:",
-			" - Always refer to users using the format: <@{user.id}>.",
-			" - Always refer to roles using the format: <@&{role.id}>.",
-			"",
-			"### Interpretation Guidelines:",
-			" - Treat all tags such as [Name (Username) <@id>] or [#Role <@&id>] as references only — do not infer meaning or context.",
-			" - Do not guess, invent, or assume any names, roles, or identities not explicitly stated.",
-			" - Follow the parsing formats above strictly. Do not create or use alternative formats.",
-			" - Do not apply the incoming message format to your response message."
+			"The following custom emojis are available for use in responses (each separated by whitespace):",
+			Object.entries(ALL_EMOJIS)
+				.map(([name, [id, animated]]) => (animated) ? `<a:${name}:${id}>` : `<:${name}:${id}>`)
+				.join(" ")
 		);
 
 		/** @type {import("openai/resources/responses/responses.mjs").ResponseInput} */
@@ -190,38 +191,36 @@ export class ChatConversation {
 			}
 		}
 
-		// Start with sender format
-		let messageHeader = lines(
-			`Channel: #${message.channel.name}`,
-			`User: ${displayName} (${author.username}) <@${author.id}>`
-		);
+		const data = {
+			currentChannel: { id: message.channel.id, name: message.channel.name },
+			messageAuthor: { id: author.id, username: author.username, displayName: displayName },
+			message: content
+		};
 
 		if (message.reference && message.reference.messageId) {
 			const ref = await this.channel.messages.fetch(message.reference.messageId);
-			messageHeader += `\nReplying to: ${ref.author.displayName} (${ref.author.username}) <@${ref.author.id}>]`;
+			data.replyingTo = {
+				id: ref.author.id,
+				username: ref.author.username,
+				displayName: ref.author.displayName
+			};
 		}
-
-		let messageContent = content;
 
 		// Replace user mentions with expanded format
 		for (let [id, user] of mentions.users) {
 			const userDisplay = user.displayName || user.username;
 			const mentionRegex = new RegExp(`<@!?${user.id}>`, 'g'); // cover both <@id> and <@!id>
 			const replacement = `[${userDisplay} (${user.username}) <@${user.id}>]`;
-			messageContent = messageContent.replace(mentionRegex, replacement);
+			data.message = data.message.replace(mentionRegex, replacement);
 		}
 
 		// Replace role mentions with expanded format
 		for (let [id, role] of mentions.roles) {
 			const mentionRegex = new RegExp(`<@&${role.id}>`, 'g');
 			const replacement = `[role ${role.name} <@&${role.id}>]`;
-			messageContent = messageContent.replace(mentionRegex, replacement);
+			data.message = data.message.replace(mentionRegex, replacement);
 		}
 
-		return lines(
-			messageHeader,
-			`Message content:`,
-			messageContent
-		);
+		return JSON.stringify(data);
 	}
 }

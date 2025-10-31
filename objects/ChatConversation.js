@@ -23,7 +23,13 @@ export class ChatConversation {
 		this.channel = channel;
 		this.model = model;
 		this.mode = mode;
+		// Resolve the bot's display name for this guild (nickname if set, otherwise username).
+		const botName = (channel.guild)
+			? (channel.guild.members.cache.get(discord.user.id)?.displayName || discord.user?.username || "")
+			: (discord.user?.username || "");
+
 		this.instructions = instructions.replaceAll("{@}", discord.user?.username || "");
+		this.instructions = this.instructions.replaceAll("{NAME}", botName);
 		this.log = scope(`conversation:${this.channel.id}`);
 
 		/** @type {string[]} */

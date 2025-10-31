@@ -1,4 +1,4 @@
-import { DMChannel, Message, NewsChannel, StageChannel, TextChannel, VoiceChannel } from "discord.js";
+import { ComponentType, DMChannel, Message, NewsChannel, StageChannel, TextChannel, VoiceChannel } from "discord.js";
 import { ChatCompletion } from "./ChatCompletion.js";
 import { lines } from "../format.js";
 import { scope } from "../logger.js";
@@ -88,7 +88,7 @@ export class ChatConversation {
 
 		const content = [];
 
-		if (message.content.length > 0)
+		if (message.content.length > 0 || message.components.length > 0)
 			content.push({ type: "input_text", text: await this.processMessage(message) });
 
 		for (const attachment of message.attachments.values()) {
@@ -170,12 +170,25 @@ export class ChatConversation {
 	 * This formats the message with a standardized user label and replaces user/role mentions
 	 * with explicit tags to help the AI better understand who is referenced.
 	 *
-	 * @param   {Message<boolean>}	message
-	 * @returns {string}			Pre-processed message content
+	 * @param   {Message<boolean>}		message
+	 * @returns {Promise<string>}		Pre-processed message content
 	 */
 	async processMessage(message) {
-		const { author, content, mentions } = message;
+		let { author, content, mentions } = message;
 		const displayName = author.displayName || author.username;
+
+		if (message.components.length > 0) {
+			for (const component of message.components) {
+				switch (component.type) {
+					case ComponentType.TextDisplay:
+						content += `\n${component.content}`;
+						break;
+
+					default:
+						break;
+				}
+			}
+		}
 
 		// Start with sender format
 		let messageHeader = lines(

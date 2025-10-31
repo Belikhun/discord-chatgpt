@@ -27,18 +27,16 @@ const conversations = {};
 //* ===========================================================
 //*  Register commands
 //* -----------------------------------------------------------
-//*  Register all commands manually, because this is just a
-//*  simple bot, I don't think a complex command system is
-//*  required.
+//*  Build commands once and provide helpers to register them
+//*  to a guild. Also register commands automatically when
+//*  the bot joins a new guild via the GuildCreate event.
 //* ===========================================================
 
 // Construct and prepare an instance of the REST module
 const rest = new REST().setToken(DISCORD_TOKEN);
 
-// and deploy your commands!
-(async () => {
-	const log = interactive("commands");
-
+// Build the commands (JSON) used by the Discord API
+function buildCommands() {
 	const commands = [
 		new SlashCommandBuilder()
 			.setName("clear")
@@ -68,21 +66,57 @@ const rest = new REST().setToken(DISCORD_TOKEN);
 			}),
 	];
 
-	try {
-		log.await(`Bắt đầu đăng ký ${commands.length} câu lệnh máy chủ.`);
+	// Convert builders to plain JSON for the REST API
+	return commands.map((c) => c.toJSON());
+}
 
-		// The put method is used to fully refresh all commands in the guild with the current set
+// Register commands to a specific guild (fast propagation)
+async function registerCommandsToGuild(guildId) {
+	const log = interactive("commands");
+	const commandsJSON = buildCommands();
+
+	try {
+		log.await(`Bắt đầu đăng ký ${commandsJSON.length} câu lệnh cho guild ${guildId}.`);
+
 		const data = await rest.put(
-			Routes.applicationGuildCommands(APP_ID, GUILD_ID),
-			{ body: commands },
+			Routes.applicationGuildCommands(APP_ID, guildId),
+			{ body: commandsJSON }
 		);
 
-		log.success(`Đã đăng ký thành công ${data.length} câu lệnh.`);
+		log.success(`Đã đăng ký thành công ${data.length} câu lệnh cho guild ${guildId}.`);
+		return data;
 	} catch (error) {
-		// And of course, make sure you catch and log any errors!
 		log.error(error);
+		throw error;
+	}
+}
+
+// At startup: if a dev/test GUILD_ID is provided, register commands there
+(async () => {
+	const log = interactive("commands");
+
+	if (GUILD_ID) {
+		try {
+			await registerCommandsToGuild(GUILD_ID);
+		} catch (e) {
+			log.error(`Không thể đăng ký lệnh cho GUILD_ID=${GUILD_ID}: ${e.message}`);
+		}
+	} else {
+		log.await("GUILD_ID không được cấu hình, bỏ qua đăng ký lệnh tại khởi động. Commands sẽ được đăng ký khi bot vào guild mới.");
 	}
 })();
+
+// When the bot joins a new guild, register the commands for that guild so
+// they are immediately available (fast, guild-scoped registration).
+discord.on(Events.GuildCreate, async (guild) => {
+	const log = interactive("commands");
+	try {
+		await registerCommandsToGuild(guild.id);
+		log.success(`Commands đã được đăng ký cho guild ${guild.id} (${guild.name}).`);
+	} catch (e) {
+		log.error(`Không thể đăng ký commands cho guild ${guild.id}: ${e.message}`);
+	}
+});
 
 
 //* ===========================================================
@@ -171,7 +205,7 @@ discord.on(Events.MessageCreate, async (message) => {
 	if (message.author.id === discord.user.id)
 		return;
 
-	if (!message.content && !message.attachments.size)
+	if (!message.content && !message.attachments.size && !message.components.length)
 		return;
 
 	if (message.content.startsWith("*clear") || message.content.startsWith("/clear")) {

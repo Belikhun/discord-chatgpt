@@ -19,10 +19,14 @@ export class ChatConversation {
 	 * @param	{string}											instructions
 	 * @param	{"chat" | "assistant"}								mode
 	 */
-	constructor(channel, model, instructions, mode) {
+	constructor(channel, model, instructions, mode, {
+		nickname = "ChatGPT"
+	} = {}) {
 		this.channel = channel;
 		this.model = model;
 		this.mode = mode;
+		this.nickname = nickname;
+
 		// Resolve the bot's display name for this guild (nickname if set, otherwise username).
 		const botName = (channel.guild)
 			? (channel.guild.members.cache.get(discord.user.id)?.displayName || discord.user?.username || "")
@@ -30,6 +34,7 @@ export class ChatConversation {
 
 		this.instructions = instructions.replaceAll("{@}", discord.user?.username || "");
 		this.instructions = this.instructions.replaceAll("{NAME}", botName);
+		this.instructions = this.instructions.replaceAll("{NICK}", this.nickname);
 		this.log = scope(`conversation:${this.channel.id}`);
 
 		/** @type {string[]} */

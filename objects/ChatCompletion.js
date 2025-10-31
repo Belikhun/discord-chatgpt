@@ -82,8 +82,8 @@ export class ChatCompletion {
 			this.thinkingMessageComponent = new TextDisplayBuilder();
 
 		const thinking = (this.imageGeneration)
-			? IMAGE_GENERATING_MESSAGE.replace("{@}", mention(this.author))
-			: THINKING_MESSAGE.replace("{@}", mention(this.author));
+			? IMAGE_GENERATING_MESSAGE.replace("{@}", mention(this.author)).replace("{NICK}", this.conversation.nickname)
+			: THINKING_MESSAGE.replace("{@}", mention(this.author)).replace("{NICK}", this.conversation.nickname);
 
 		const lines = [
 			`### ${code(this.model, true)} ${space()}${emoji("minecraft_clock", true)} ${timestampMessage(this.startDate, "R")}`,

@@ -1,4 +1,4 @@
-import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel } from "discord.js";
+import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User } from "discord.js";
 import { log, interactive } from "./logger.js";
 import { discord, authenticateDiscordClient } from "./clients/discord.js";
 import { bold, code, emoji } from "./format.js";
@@ -18,7 +18,8 @@ const {
 	SYSTEM_ROLE_MODEL,
 	SYSTEM_ROLE_CHAT,
 	SYSTEM_ROLE_ASSISTANT,
-	MODEL_DEFAULT
+	MODEL_DEFAULT,
+	NICKNAME_DEFAULT
 } = env;
 
 /** @type {{[channelId: string]: ChatConversation}} */
@@ -63,6 +64,15 @@ function buildCommands() {
 						{ name: "Tin nhắn", value: "chat" },
 						{ name: "Trợ lý", value: "assistant" }
 					);
+			}),
+
+		new SlashCommandBuilder()
+			.setName("nickname")
+			.setDescription("Đặt nickname cho bot trong máy chủ hiện tại")
+			.addStringOption((option) => {
+				return option.setName("name")
+					.setDescription("Nickname mới cho bot")
+					.setRequired(true);
 			}),
 	];
 
@@ -126,6 +136,17 @@ discord.on(Events.GuildCreate, async (guild) => {
 //*  commands.
 //* ===========================================================
 
+/**
+ * Check if the user has Manage Messages permission in the guild.
+ * 
+ * @param	{Guild}		guild
+ * @param	{User}		user
+ * @returns 
+ */
+function hasManagePermission(guild, user) {
+	return guild.members.cache.get(user.id)?.permissions.has("ManageMessages") || false;
+}
+
 discord.on(Events.ClientReady, () => {
 	log.success(`Đã đăng nhập dưới tài khoản ${discord.user.tag}!`);
 });
@@ -147,10 +168,20 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				await interaction.reply({
 					content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`
 				});
+
 				break;
 			}
 
 			case "model": {
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
 				const model = interaction.options.getString("model", true);
 				conversations[interaction.channelId] = null;
 				config.set(`model.${interaction.channelId}`, model);
@@ -158,10 +189,20 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				await interaction.reply({
 					content: `${emoji("acinfo")} Model cho kênh chat này đã được đặt thành ${code(model)}!`
 				});
+
 				break;
 			}
 
 			case "mode": {
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
 				const mode = interaction.options.getString("mode", true);
 				conversations[interaction.channelId] = null;
 				config.set(`mode.${interaction.channelId}`, mode);
@@ -169,6 +210,39 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				await interaction.reply({
 					content: `${emoji("acinfo")} Chế độ phản hồi cho kênh hiện tại được đặt thành ${code(mode)}!`
 				});
+
+				break;
+			}
+
+			case "nickname": {
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				const name = interaction.options.getString("name", true);
+
+				if (!interaction.guild) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Lệnh này chỉ có thể sử dụng trong máy chủ!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+				
+				const nicknames = config.get("nicknames", {});
+				nicknames[interaction.guild.id] = name;
+				config.set("nicknames", nicknames);
+
+				await interaction.reply({
+					content: `${emoji("acinfo")} Nickname của bot trong máy chủ này đã được đặt thành ${code(name)}!`
+				});
+
 				break;
 			}
 		
@@ -241,7 +315,11 @@ discord.on(Events.MessageCreate, async (message) => {
 					: SYSTEM_ROLE_ASSISTANT;
 			}
 
-			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions, mode);
+			const nicknames = config.get("nicknames", {});
+			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions, mode, {
+				nickname: nicknames[message.guild?.id] || NICKNAME_DEFAULT
+			});
+
 			conversations[message.channelId].conversationWakeupKeywords = WAKEUP_KEYWORDS;
 		}
 

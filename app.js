@@ -15,6 +15,7 @@ const {
 	ICON,
 	WAKEUP_KEYWORDS,
 	SYSTEM_ROLE_CHANNEL,
+	SYSTEM_ROLE_SERVER,
 	SYSTEM_ROLE_MODEL,
 	SYSTEM_ROLE_CHAT,
 	SYSTEM_ROLE_ASSISTANT,
@@ -307,6 +308,8 @@ discord.on(Events.MessageCreate, async (message) => {
 			let instructions;
 			if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {
 				instructions = SYSTEM_ROLE_CHANNEL[message.channelId];
+			} else if (message.guild && typeof SYSTEM_ROLE_SERVER[message.guild.id] !== "undefined") {
+				instructions = SYSTEM_ROLE_SERVER[message.guild.id];
 			} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
 				instructions = SYSTEM_ROLE_MODEL[model];
 			} else {

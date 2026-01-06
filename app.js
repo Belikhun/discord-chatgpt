@@ -16,6 +16,7 @@ const {
 	WAKEUP_KEYWORDS,
 	SYSTEM_ROLE_CHANNEL,
 	SYSTEM_ROLE_SERVER,
+	SYSTEM_ROLE_SERVER_ASSISTANT,
 	SYSTEM_ROLE_MODEL,
 	SYSTEM_ROLE_CHAT,
 	SYSTEM_ROLE_ASSISTANT,
@@ -306,16 +307,23 @@ discord.on(Events.MessageCreate, async (message) => {
 			const mode = config.get(`mode.${message.channelId}`, (message.channel instanceof DMChannel) ? "assistant" : "chat");
 
 			let instructions;
-			if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {
-				instructions = SYSTEM_ROLE_CHANNEL[message.channelId];
-			} else if (message.guild && typeof SYSTEM_ROLE_SERVER[message.guild.id] !== "undefined") {
-				instructions = SYSTEM_ROLE_SERVER[message.guild.id];
-			} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
-				instructions = SYSTEM_ROLE_MODEL[model];
+
+			if (mode === "chat") {
+				if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {
+					instructions = SYSTEM_ROLE_CHANNEL[message.channelId];
+				} else if (message.guild && typeof SYSTEM_ROLE_SERVER[message.guild.id] !== "undefined") {
+					instructions = SYSTEM_ROLE_SERVER[message.guild.id];
+				} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
+					instructions = SYSTEM_ROLE_MODEL[model];
+				} else {
+					instructions = SYSTEM_ROLE_CHAT;
+				}
 			} else {
-				instructions = (mode === "chat")
-					? SYSTEM_ROLE_CHAT
-					: SYSTEM_ROLE_ASSISTANT;
+				if (message.guild && typeof SYSTEM_ROLE_SERVER_ASSISTANT[message.guild.id] !== "undefined") {
+					instructions = SYSTEM_ROLE_SERVER_ASSISTANT[message.guild.id];
+				} else {
+					instructions = SYSTEM_ROLE_ASSISTANT;
+				}
 			}
 
 			const nicknames = config.get("nicknames", {});

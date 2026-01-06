@@ -79,6 +79,10 @@ export class ChatConversation {
 		this.log.info(`New conversation created in ${this.mode} mode, using model ${this.model}`);
 	}
 
+	purgeExpiredHistory() {
+		this.history = this.history.filter(({ timestamp }) => ((Date.now() - timestamp) < 86400000));
+	}
+
 	isReasoningModel() {
 		return (this.model.match(/^o(\d{1})/gm) != null);
 	}
@@ -89,8 +93,7 @@ export class ChatConversation {
 	 * @param	{Message<boolean>}	message
 	 */
 	async handle(message) {
-		// Filter history that had been more than 1 day.
-		this.history = this.history.filter(({ timestamp }) => ((Date.now() - timestamp) < 86400000));
+		this.purgeExpiredHistory();
 
 		if (this.mode === "assistant") {
 			const chat = new ChatCompletion(this, message, this.model);
@@ -139,6 +142,34 @@ export class ChatConversation {
 		}
 
 		this.skippedMessages = 0;
+		await this.respondFromHistory();
+
+		return this;
+	}
+
+	async handleStructuredPrompt(payload, { activateChat = true, role = "user" } = {}) {
+		this.purgeExpiredHistory();
+
+		const text = (typeof payload === "string")
+			? payload
+			: JSON.stringify(payload);
+
+		this.history.push({
+			role,
+			content: [{ type: "input_text", text }],
+			timestamp: Date.now()
+		});
+
+		if (activateChat) {
+			this.chatActivated = true;
+			this.skippedMessages = 0;
+		}
+
+		await this.respondFromHistory({ activateChat });
+		return this;
+	}
+
+	async respondFromHistory({ activateChat = true } = {}) {
 		const options = {};
 
 		if (this.isReasoningModel()) {
@@ -152,7 +183,7 @@ export class ChatConversation {
 			model: this.model,
 			instructions: this.instructions,
 			input: this.history.map((item) => {
-				const i = { ...item }
+				const i = { ...item };
 				delete i.timestamp;
 				return i;
 			}),
@@ -165,20 +196,25 @@ export class ChatConversation {
 			return item;
 		}));
 
-		if (output_text.trim() !== "[skip]" && output_text.trim() !== "`[skip]`" && !output_text.startsWith("[skip]")) {
-			this.chatActivated = true;
-			this.skipStreak = 0;
+		const trimmed = output_text.trim();
 
-			await this.channel.send({
-				content: output_text
-			});
-		} else {
+		if (trimmed === "[skip]" || trimmed === "`[skip]`" || trimmed.startsWith("[skip]")) {
 			this.chatActivated = false;
 			this.skipStreak += 1;
 			this.log.info(`Response was [skip], not sending message.`);
+			return null;
 		}
 
-		return this;
+		if (activateChat)
+			this.chatActivated = true;
+
+		this.skipStreak = 0;
+
+		await this.channel.send({
+			content: output_text
+		});
+
+		return output_text;
 	}
 
 	/**

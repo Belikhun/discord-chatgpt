@@ -1,4 +1,4 @@
-import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User } from "discord.js";
+import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User, PermissionsBitField } from "discord.js";
 import { log, interactive } from "./logger.js";
 import { discord, authenticateDiscordClient } from "./clients/discord.js";
 import { bold, code, emoji } from "./format.js";
@@ -149,12 +149,91 @@ function hasManagePermission(guild, user) {
 	return guild.members.cache.get(user.id)?.permissions.has("ManageMessages") || false;
 }
 
+function resolveConversation(channel, { modeOverride } = {}) {
+	if (conversations[channel.id])
+		return conversations[channel.id];
+
+	const model = config.get(`model.${channel.id}`, MODEL_DEFAULT);
+	const mode = modeOverride ?? config.get(`mode.${channel.id}`, (channel instanceof DMChannel) ? "assistant" : "chat");
+
+	let instructions;
+
+	if (mode === "chat") {
+		if (typeof SYSTEM_ROLE_CHANNEL[channel.id] !== "undefined") {
+			instructions = SYSTEM_ROLE_CHANNEL[channel.id];
+		} else if (channel.guild && typeof SYSTEM_ROLE_SERVER[channel.guild.id] !== "undefined") {
+			instructions = SYSTEM_ROLE_SERVER[channel.guild.id];
+		} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
+			instructions = SYSTEM_ROLE_MODEL[model];
+		} else {
+			instructions = SYSTEM_ROLE_CHAT;
+		}
+	} else {
+		if (channel.guild && typeof SYSTEM_ROLE_SERVER_ASSISTANT[channel.guild.id] !== "undefined") {
+			instructions = SYSTEM_ROLE_SERVER_ASSISTANT[channel.guild.id];
+		} else {
+			instructions = SYSTEM_ROLE_ASSISTANT;
+		}
+	}
+
+	const nicknames = config.get("nicknames", {});
+	const conversation = new ChatConversation(channel, model, instructions, mode, {
+		nickname: nicknames[channel.guild?.id] || NICKNAME_DEFAULT
+	});
+
+	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
+	conversations[channel.id] = conversation;
+
+	return conversation;
+}
+
+function pickWelcomeChannel(guild) {
+	if (!guild)
+		return null;
+
+	const canSend = (channel) => channel.isTextBased()
+		&& channel.viewable
+		&& channel.permissionsFor(guild.members.me ?? guild.client.user)?.has(PermissionsBitField.Flags.SendMessages);
+
+	if (guild.systemChannel && canSend(guild.systemChannel))
+		return guild.systemChannel;
+
+	return guild.channels.cache.find((channel) => canSend(channel)) || null;
+}
+
 discord.on(Events.ClientReady, () => {
 	log.success(`Đã đăng nhập dưới tài khoản ${discord.user.tag}!`);
 });
 
 discord.on(Events.MessageUpdate, async (message) => {
 	
+});
+
+discord.on(Events.GuildMemberAdd, async (member) => {
+	const channel = pickWelcomeChannel(member.guild);
+
+	if (!channel) {
+		log.warn(`Không tìm thấy kênh phù hợp để chào mừng thành viên mới trong guild ${member.guild.id}.`);
+		return;
+	}
+
+	const conversation = resolveConversation(channel);
+	const structuredWelcome = {
+		currentChannel: { id: channel.id, name: channel.name },
+		messageAuthor: {
+			id: member.user.id,
+			username: member.user.username,
+			displayName: member.displayName || member.user.username
+		},
+		message: `New member joined: <@${member.user.id}> just joined ${member.guild.name}. Welcome them warmly, mention them directly, and share a quick tip about this server.`,
+		event: "guild_member_join"
+	};
+
+	try {
+		await conversation.handleStructuredPrompt(structuredWelcome, { activateChat: true, role: "developer" });
+	} catch (e) {
+		log.error(`Không thể gửi lời chào cho thành viên mới ${member.user.tag}: ${e.message}`);
+	}
 });
 
 discord.on(Events.InteractionCreate, async (interaction) => {
@@ -285,8 +364,8 @@ discord.on(Events.MessageCreate, async (message) => {
 		return;
 
 	if (message.content.startsWith("*clear") || message.content.startsWith("/clear")) {
-		const count = channelMessages[message.channelId]?.length || 0;
-		channelMessages[message.channelId] = null;
+		const count = conversations[message.channelId]?.history.length || 0;
+		conversations[message.channelId] = null;
 
 		await message.reply({
 			content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`
@@ -302,39 +381,8 @@ discord.on(Events.MessageCreate, async (message) => {
 	log.debug(`▼ Tin nhắn mới: \"${message.content}\" từ ${channelName} [${message.channelId}] bởi ${message.author.displayName} [${message.author.id}]`);
 
 	try {
-		if (!conversations[message.channelId]) {
-			const model = config.get(`model.${message.channelId}`, MODEL_DEFAULT);
-			const mode = config.get(`mode.${message.channelId}`, (message.channel instanceof DMChannel) ? "assistant" : "chat");
-
-			let instructions;
-
-			if (mode === "chat") {
-				if (typeof SYSTEM_ROLE_CHANNEL[message.channelId] !== "undefined") {
-					instructions = SYSTEM_ROLE_CHANNEL[message.channelId];
-				} else if (message.guild && typeof SYSTEM_ROLE_SERVER[message.guild.id] !== "undefined") {
-					instructions = SYSTEM_ROLE_SERVER[message.guild.id];
-				} else if (typeof SYSTEM_ROLE_MODEL[model] !== "undefined") {
-					instructions = SYSTEM_ROLE_MODEL[model];
-				} else {
-					instructions = SYSTEM_ROLE_CHAT;
-				}
-			} else {
-				if (message.guild && typeof SYSTEM_ROLE_SERVER_ASSISTANT[message.guild.id] !== "undefined") {
-					instructions = SYSTEM_ROLE_SERVER_ASSISTANT[message.guild.id];
-				} else {
-					instructions = SYSTEM_ROLE_ASSISTANT;
-				}
-			}
-
-			const nicknames = config.get("nicknames", {});
-			conversations[message.channelId] = new ChatConversation(message.channel, model, instructions, mode, {
-				nickname: nicknames[message.guild?.id] || NICKNAME_DEFAULT
-			});
-
-			conversations[message.channelId].conversationWakeupKeywords = WAKEUP_KEYWORDS;
-		}
-
-		await conversations[message.channelId].handle(message);
+		const conversation = resolveConversation(message.channel);
+		await conversation.handle(message);
 	} catch (e) {
 		const embed = new EmbedBuilder()
 			.setColor(0xff6380)

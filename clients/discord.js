@@ -16,6 +16,7 @@ log.debug("Khởi tạo discord client.");
 export const discord = new Client({
 	intents: [
 		GatewayIntentBits.Guilds,
+		GatewayIntentBits.GuildMembers,
 		GatewayIntentBits.GuildMessages,
 		GatewayIntentBits.MessageContent,
 		GatewayIntentBits.DirectMessages,

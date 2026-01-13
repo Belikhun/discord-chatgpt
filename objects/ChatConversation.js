@@ -42,6 +42,9 @@ export class ChatConversation {
 		this.skippedMessages = 0;
 		this.skipStreak = 0;
 		this.chatActivated = false;
+		this.pendingProcess = false;
+		this.processTimer = null;
+		this.processDebounceMs = 1000;
 
 		this.instructions += "\n" + lines(
 			"All messages come as structured JSON objects representing Discord messages.",
@@ -138,13 +141,37 @@ export class ChatConversation {
 		if (!shouldProcess) {
 			this.log.info(`Message added to history, will not process this message.`);
 			this.skippedMessages += 1;
+			this.scheduleProcess();
 			return this;
 		}
 
 		this.skippedMessages = 0;
-		await this.respondFromHistory();
+		this.pendingProcess = true;
+		this.scheduleProcess();
 
 		return this;
+	}
+
+	scheduleProcess() {
+		if (this.processTimer) {
+			clearTimeout(this.processTimer);
+		}
+
+		this.processTimer = setTimeout(async () => {
+			this.processTimer = null;
+
+			if (!this.pendingProcess) {
+				return;
+			}
+
+			try {
+				await this.respondFromHistory();
+			} catch (err) {
+				this.log.error(`Failed to process debounced messages: ${err.message}`);
+			} finally {
+				this.pendingProcess = false;
+			}
+		}, this.processDebounceMs);
 	}
 
 	async handleStructuredPrompt(payload, { activateChat = true, role = "user" } = {}) {

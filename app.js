@@ -21,7 +21,9 @@ const {
 	SYSTEM_ROLE_CHAT,
 	SYSTEM_ROLE_ASSISTANT,
 	MODEL_DEFAULT,
-	NICKNAME_DEFAULT
+	NICKNAME_DEFAULT,
+	WELCOME_INSTRUCTION_DEFAULT,
+	WELCOME_INSTRUCTION_SERVER
 } = env;
 
 /** @type {{[channelId: string]: ChatConversation}} */
@@ -218,6 +220,16 @@ discord.on(Events.GuildMemberAdd, async (member) => {
 	}
 
 	const conversation = resolveConversation(channel);
+	const welcomeTemplate = (WELCOME_INSTRUCTION_SERVER?.[member.guild.id])
+		|| WELCOME_INSTRUCTION_DEFAULT
+		|| "New member joined: <@{userId}> just joined {serverName}. Welcome them warmly, mention them directly, and share a quick tip about this server.";
+
+	const welcomeMessage = welcomeTemplate
+		.replaceAll("{userId}", member.user.id)
+		.replaceAll("{username}", member.user.username)
+		.replaceAll("{displayName}", member.displayName || member.user.username)
+		.replaceAll("{serverName}", member.guild.name)
+		.replaceAll("{channelName}", channel.name || "");
 	const structuredWelcome = {
 		currentChannel: { id: channel.id, name: channel.name },
 		messageAuthor: {
@@ -225,7 +237,7 @@ discord.on(Events.GuildMemberAdd, async (member) => {
 			username: member.user.username,
 			displayName: member.displayName || member.user.username
 		},
-		message: `New member joined: <@${member.user.id}> just joined ${member.guild.name}. Welcome them warmly, mention them directly, and share a quick tip about this server.`,
+		message: welcomeMessage,
 		event: "guild_member_join"
 	};
 

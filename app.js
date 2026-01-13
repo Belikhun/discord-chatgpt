@@ -151,6 +151,24 @@ function hasManagePermission(guild, user) {
 	return guild.members.cache.get(user.id)?.permissions.has("ManageMessages") || false;
 }
 
+function buildErrorEmbed(error, { actorName, actorIcon } = {}) {
+	const embed = new EmbedBuilder()
+		.setColor(0xff6380)
+		.setTitle(`${emoji("acerror")}  Có lỗi nghiêm trọng đã xảy ra!`)
+		.setDescription(`${bold(error.name || "Error")} ${error.message}\n\`\`\`${error.stack}\`\`\``)
+		.setTimestamp()
+		.setFooter({ text: APP_NAME, iconURL: ICON });
+
+	if (actorName || actorIcon) {
+		embed.setAuthor({
+			name: actorName,
+			iconURL: actorIcon
+		});
+	}
+
+	return embed;
+}
+
 function resolveConversation(channel, { modeOverride } = {}) {
 	if (conversations[channel.id])
 		return conversations[channel.id];
@@ -207,12 +225,17 @@ discord.on(Events.ClientReady, () => {
 	log.success(`Đã đăng nhập dưới tài khoản ${discord.user.tag}!`);
 });
 
+discord.on("error", (err) => {
+	log.error(`Discord client error: ${err?.message || err}`);
+});
+
 discord.on(Events.MessageUpdate, async (message) => {
 	
 });
 
 discord.on(Events.GuildMemberAdd, async (member) => {
 	const channel = pickWelcomeChannel(member.guild);
+	log.info(`Người dùng mới tham gia guild ${member.guild.id}, chọn kênh ${channel?.id || "null"} để gửi lời chào.`);
 
 	if (!channel) {
 		log.warn(`Không tìm thấy kênh phù hợp để chào mừng thành viên mới trong guild ${member.guild.id}.`);
@@ -245,6 +268,12 @@ discord.on(Events.GuildMemberAdd, async (member) => {
 		await conversation.handleStructuredPrompt(structuredWelcome, { activateChat: true, role: "developer" });
 	} catch (e) {
 		log.error(`Không thể gửi lời chào cho thành viên mới ${member.user.tag}: ${e.message}`);
+
+		try {
+			await channel.send(`${emoji("acerror")} Bot thiếu quyền gửi tin nhắn ở kênh này.`);
+		} catch (sendErr) {
+			log.error(`Không thể gửi thông báo lỗi trong kênh ${channel.id}: ${sendErr.message}`);
+		}
 	}
 });
 
@@ -345,23 +374,21 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 			}
 		}
 	} catch (e) {
-		const embed = new EmbedBuilder()
-			.setColor(0xff6380)
-			.setTitle(`${emoji("acerror")}  Có lỗi nghiêm trọng đã xảy ra!`)
-			.setDescription(`${bold(e.name)} ${e.message}\n\`\`\`${e.stack}\`\`\``)
-			.setAuthor({
-				name: interaction.user.displayName,
-				iconURL: interaction.user.displayAvatarURL()
-			})
-			.setTimestamp()
-			.setFooter({ text: APP_NAME, iconURL: ICON });
-		
+		const embed = buildErrorEmbed(e, {
+			actorName: interaction.user.displayName,
+			actorIcon: interaction.user.displayAvatarURL()
+		});
+
 		log.error(e);
 
-		if (interaction.replied || interaction.deferred) {
-			await interaction.followUp({ embeds: [embed], ephemeral: true });
-		} else {
-			await interaction.reply({ embeds: [embed], ephemeral: true });
+		try {
+			if (interaction.replied || interaction.deferred) {
+				await interaction.followUp({ embeds: [embed], ephemeral: true });
+			} else {
+				await interaction.reply({ embeds: [embed], ephemeral: true });
+			}
+		} catch (sendErr) {
+			log.error(`Failed to send interaction error response: ${sendErr.message}`);
 		}
 	}
 });
@@ -396,19 +423,18 @@ discord.on(Events.MessageCreate, async (message) => {
 		const conversation = resolveConversation(message.channel);
 		await conversation.handle(message);
 	} catch (e) {
-		const embed = new EmbedBuilder()
-			.setColor(0xff6380)
-			.setTitle(`${emoji("acerror")}  Có lỗi nghiêm trọng đã xảy ra!`)
-			.setDescription(`${bold(e.name)} ${e.message}\n\`\`\`${e.stack}\`\`\``)
-			.setAuthor({
-				name: message.author.displayName,
-				iconURL: message.author.displayAvatarURL()
-			})
-			.setTimestamp()
-			.setFooter({ text: APP_NAME, iconURL: ICON });
-		
+		const embed = buildErrorEmbed(e, {
+			actorName: message.author.displayName,
+			actorIcon: message.author.displayAvatarURL()
+		});
+
 		log.error(e);
-		await message.reply({ embeds: [embed] });
+
+		try {
+			await message.reply({ embeds: [embed] });
+		} catch (sendErr) {
+			log.error(`Failed to send error embed in channel ${message.channelId}: ${sendErr.message}`);
+		}
 	}
 });
 

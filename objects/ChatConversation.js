@@ -210,9 +210,27 @@ export class ChatConversation {
 
 		this.skipStreak = 0;
 
-		await this.channel.send({
-			content: output_text
-		});
+		const canSend = () => {
+			if (this.channel instanceof DMChannel)
+				return true;
+
+			const perms = this.channel.permissionsFor(discord.user);
+			return perms?.has("SendMessages") ?? false;
+		};
+
+		if (!canSend()) {
+			this.log.warn(`Missing SendMessages permission for channel ${this.channel.id}, skipping send.`);
+			return null;
+		}
+
+		try {
+			await this.channel.send({
+				content: output_text
+			});
+		} catch (err) {
+			this.log.error(`Failed to send message to channel ${this.channel.id}: ${err.message}`);
+			return null;
+		}
 
 		return output_text;
 	}

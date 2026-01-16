@@ -247,21 +247,23 @@ discord.on(Events.GuildMemberAdd, async (member) => {
 		|| WELCOME_INSTRUCTION_DEFAULT
 		|| "New member joined: <@{userId}> just joined {serverName}. Welcome them warmly, mention them directly, and share a quick tip about this server.";
 
-	const welcomePrompt = [
-		"Generate a concise, friendly Discord welcome message using the template and data below.",
-		"Template: " + welcomeTemplate,
-		"Data:",
-		`- userId: ${member.user.id}`,
-		`- username: ${member.user.username}`,
-		`- displayName: ${member.displayName || member.user.username}`,
-		`- serverName: ${member.guild.name}`,
-		`- channelName: ${channel.name || ""}`,
-		"Rules:",
-		`- Mention the member explicitly as <@${member.user.id}>`,
-		"- Keep it to one or two sentences.",
-		"- Include one quick tip about the server if possible.",
-		"- Reply in plain text only."
-	].join("\n");
+	const welcomePayload = {
+		type: "welcome",
+		template: welcomeTemplate,
+		data: {
+			userId: member.user.id,
+			username: member.user.username,
+			displayName: member.displayName || member.user.username,
+			serverName: member.guild.name,
+			channelName: channel.name || ""
+		},
+		rules: [
+			`Mention the member explicitly as <@${member.user.id}>`,
+			"Keep it to one or two sentences.",
+			"Include one quick tip about the server if possible.",
+			"Reply in plain text only."
+		]
+	};
 	const structuredWelcome = {
 		currentChannel: { id: channel.id, name: channel.name },
 		messageAuthor: {
@@ -269,7 +271,7 @@ discord.on(Events.GuildMemberAdd, async (member) => {
 			username: member.user.username,
 			displayName: member.displayName || member.user.username
 		},
-		message: welcomePrompt,
+		message: JSON.stringify(welcomePayload),
 		event: "guild_member_join"
 	};
 

@@ -3,6 +3,7 @@ import { bold, code, emoji, formatTime, h3, lines, mention, sh, space, timestamp
 import { supportSearch, openAI, supportImageGeneration } from "../clients/openai.js";
 import { scope } from "../logger.js";
 import { ChatConversation } from "./ChatConversation.js";
+import { ChatTool } from "./ChatTool.js";
 import fs from "node:fs";
 
 import env from "../env.json" with { type: "json" };
@@ -67,6 +68,9 @@ export class ChatCompletion {
 		/** @type {string[]} */
 		this.generationPrompt = [];
 
+		/** @type {Set<string>} */
+		this.toolCallsUsed = new Set();
+
 		/** @type {MediaGalleryBuilder} */
 		this.gallery = null;
 
@@ -104,6 +108,12 @@ export class ChatCompletion {
 			lines.push(sh(`> ${thought}`));
 		}
 
+		if (this.toolCallsUsed.size > 0) {
+			for (const toolName of this.toolCallsUsed) {
+				lines.push(`-# > :toolbox: Đã gọi: **${toolName}**`);
+			}
+		}
+
 		return this.thinkingMessageComponent.setContent(lines.join("\n"));
 	}
 
@@ -115,7 +125,7 @@ export class ChatCompletion {
 	}
 
 	isReasoningModel() {
-		return (this.model.match(/^o(\d{1})/gm) != null);
+		return (/^o\d/.test(this.model) || /^gpt-5(\.|$)/.test(this.model));
 	}
 
 	prepareImageIndex(index) {
@@ -150,6 +160,7 @@ export class ChatCompletion {
 		this.startDate = new Date();
 		this.log.info(`Chat completion started`);
 		this.originalMessage.channel.sendTyping();
+		this.toolCallsUsed.clear();
 
 		this.thinkingReply = await this.originalMessage.reply({
 			flags: MessageFlags.IsComponentsV2,
@@ -182,8 +193,8 @@ export class ChatCompletion {
 
 		if (this.isReasoningModel()) {
 			options.reasoning = {
-				effort: "high",
-				summary: "detailed"
+				effort: "low",
+				summary: "auto"
 			};
 		}
 
@@ -193,14 +204,78 @@ export class ChatCompletion {
 		if (supportImageGeneration.includes(this.model))
 			options.tools.push({ type: "image_generation" });
 
+		options.tools.push(...ChatTool.tools());
+		let input = this.conversation.history.map((item) => {
+			const i = { ...item };
+			delete i.timestamp;
+			return i;
+		});
+
+		let pass = 0;
+		let finalResponse = null;
+		let toolCalls = [];
+
+		while (pass < 3) {
+			const result = await this.runResponseStream({
+				input,
+				options
+			});
+
+			finalResponse = result.response;
+			toolCalls = result.toolCalls;
+
+			if (finalResponse?.output?.length) {
+				this.conversation.history.push(...finalResponse.output.map((item) => ({
+					...item,
+					timestamp: Date.now()
+				})));
+			}
+
+			if (!toolCalls || toolCalls.length === 0) {
+				break;
+			}
+
+			const toolOutputs = await ChatTool.runToolCalls(toolCalls, {
+				conversation: this.conversation,
+				message: this.originalMessage
+			});
+
+			this.conversation.history.push(...toolOutputs.map((item) => ({
+				...item,
+				timestamp: Date.now()
+			})));
+
+			const sanitizedOutput = (finalResponse.output || []).map((item) => {
+				const cloned = { ...item };
+				delete cloned.timestamp;
+				return cloned;
+			});
+			const sanitizedToolOutputs = toolOutputs.map((item) => {
+				const cloned = { ...item };
+				delete cloned.timestamp;
+				return cloned;
+			});
+			input = input.concat(sanitizedOutput, sanitizedToolOutputs);
+			pass += 1;
+		}
+
+		if (!this.inResponse && this.responses.length === 0 && this.responseBuffer.trim().length === 0) {
+			this.handleOutput("*Không có nội dung phản hồi*");
+		}
+
+		this.completed = true;
+		this.deferUpdate();
+		this.log.success(`Chat completed. Runtime ${formatTime(this.runtime)}`);
+	}
+
+	async runResponseStream({ input, options }) {
+		const toolCalls = {};
+		let finalResponse = null;
+
 		const response = await openAI.responses.create({
 			model: this.model,
 			instructions: this.conversation.instructions,
-			input: this.conversation.history.map((item) => {
-				const i = { ...item }
-				delete i.timestamp;
-				return i;
-			}),
+			input,
 			stream: true,
 			...options
 		});
@@ -225,6 +300,33 @@ export class ChatCompletion {
 
 				case "response.output_text.delta": {
 					this.handleOutput(event.delta);
+					break;
+				}
+
+				case "response.output_item.added": {
+					if (event.item?.type === "function_call") {
+						toolCalls[event.output_index] = {
+							...event.item,
+							arguments: event.item.arguments || ""
+						};
+						this.markToolCalled(event.item.name);
+					}
+					break;
+				}
+
+				case "response.function_call_arguments.delta": {
+					const current = toolCalls[event.output_index];
+					if (current)
+						current.arguments += event.delta || "";
+
+					break;
+				}
+
+				case "response.function_call_arguments.done": {
+					const current = toolCalls[event.output_index];
+					if (current && event.arguments)
+						current.arguments = event.arguments;
+
 					break;
 				}
 
@@ -272,15 +374,7 @@ export class ChatCompletion {
 				}
 
 				case "response.completed": {
-					const { output } = event.response;
-					this.conversation.history.push(...output.map((item) => {
-						item.timestamp = Date.now();
-						return item;
-					}));
-
-					this.completed = true;
-					this.deferUpdate();
-					this.log.success(`Chat completed. Runtime ${formatTime(this.runtime)}`);
+					finalResponse = event.response;
 					break;
 				}
 
@@ -288,6 +382,21 @@ export class ChatCompletion {
 					this.log.debug(event);
 					break;
 			}
+		}
+
+		return {
+			response: finalResponse,
+			toolCalls: Object.values(toolCalls)
+		};
+	}
+
+	markToolCalled(toolName) {
+		if (!toolName)
+			return;
+
+		if (!this.toolCallsUsed.has(toolName)) {
+			this.toolCallsUsed.add(toolName);
+			this.deferUpdate();
 		}
 	}
 

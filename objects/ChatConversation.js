@@ -1,5 +1,6 @@
 import { ComponentType, DMChannel, Message, NewsChannel, StageChannel, TextChannel, VoiceChannel } from "discord.js";
 import { ChatCompletion } from "./ChatCompletion.js";
+import { ChatTool } from "./ChatTool.js";
 import { lines } from "../format.js";
 import { scope } from "../logger.js";
 import { openAI } from "../clients/openai.js";
@@ -52,8 +53,11 @@ export class ChatConversation {
 			"",
 			"Schema:",
 			'{ "currentChannel": { "id": string, "name": string },',
+			'  "channelId": string,',
+			'  "serverId": string,',
+			'  "messageId": string,',
 			'  "messageAuthor": { "id": string, "username": string, "displayName": string },',
-			'  "replyingTo"?: { "id": string, "username": string, "displayName": string },',
+			'  "replyingTo"?: { "id": string, "username": string, "displayName": string, "messageId": string },',
 			'  "message": string }',
 			"",
 			"Discord formatting rules:",
@@ -89,7 +93,7 @@ export class ChatConversation {
 	}
 
 	isReasoningModel() {
-		return (this.model.match(/^o(\d{1})/gm) != null);
+		return (/^o\d/.test(this.model) || /^gpt-5(\.|$)/.test(this.model));
 	}
 
 	/**
@@ -199,7 +203,7 @@ export class ChatConversation {
 	}
 
 	async respondFromHistory({ activateChat = true } = {}) {
-		const options = {};
+		const options = { tools: ChatTool.tools() };
 
 		if (this.isReasoningModel()) {
 			options.reasoning = {
@@ -208,22 +212,59 @@ export class ChatConversation {
 			};
 		}
 
-		let { output, output_text } = await openAI.responses.create({
-			model: this.model,
-			instructions: this.instructions,
-			input: this.history.map((item) => {
-				const i = { ...item };
-				delete i.timestamp;
-				return i;
-			}),
-			...options
+		let input = this.history.map((item) => {
+			const i = { ...item };
+			delete i.timestamp;
+			return i;
 		});
 
+		let response = null;
+		let output = [];
+		let output_text = "";
+		let toolCalls = [];
+		let pass = 0;
+
+		while (pass < 3) {
+			response = await openAI.responses.create({
+				model: this.model,
+				instructions: this.instructions,
+				input,
+				...options
+			});
+
+			output = response.output || [];
+			this.history.push(...output.map((item) => ({
+				...item,
+				timestamp: Date.now()
+			})));
+
+			toolCalls = ChatTool.extractToolCalls(output);
+			if (toolCalls.length === 0) {
+				output_text = response.output_text || this.extractOutputText(output);
+				break;
+			}
+
+			const toolOutputs = await ChatTool.runToolCalls(toolCalls, { conversation: this });
+			this.history.push(...toolOutputs.map((item) => ({
+				...item,
+				timestamp: Date.now()
+			})));
+
+			const sanitizedOutput = output.map((item) => {
+				const cloned = { ...item };
+				delete cloned.timestamp;
+				return cloned;
+			});
+			const sanitizedToolOutputs = toolOutputs.map((item) => {
+				const cloned = { ...item };
+				delete cloned.timestamp;
+				return cloned;
+			});
+			input = input.concat(sanitizedOutput, sanitizedToolOutputs);
+			pass += 1;
+		}
+
 		this.log.info(`Got chat response: ${output_text}`);
-		this.history.push(...output.map((item) => {
-			item.timestamp = Date.now();
-			return item;
-		}));
 
 		const trimmed = output_text.trim();
 
@@ -275,6 +316,22 @@ export class ChatConversation {
 		return output_text;
 	}
 
+	extractOutputText(output = []) {
+		const texts = [];
+
+		for (const item of output) {
+			if (item?.type !== "message")
+				continue;
+
+			for (const part of item.content || []) {
+				if (part?.type === "output_text" && typeof part.text === "string")
+					texts.push(part.text);
+			}
+		}
+
+		return texts.join("\n");
+	}
+
 	/**
 	 * Pre-process a Discord message for chat completion.
 	 *
@@ -303,6 +360,9 @@ export class ChatConversation {
 
 		const data = {
 			currentChannel: { id: message.channel.id, name: message.channel.name },
+			channelId: message.channel.id,
+			serverId: message.guild?.id || null,
+			messageId: message.id,
 			messageAuthor: { id: author.id, username: author.username, displayName: displayName },
 			message: content
 		};
@@ -312,7 +372,8 @@ export class ChatConversation {
 			data.replyingTo = {
 				id: ref.author.id,
 				username: ref.author.username,
-				displayName: ref.author.displayName
+				displayName: ref.author.displayName,
+				messageId: ref.id
 			};
 		}
 

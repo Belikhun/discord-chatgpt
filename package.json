@@ -11,7 +11,7 @@
   "author": "Belikhun",
   "license": "MIT",
   "dependencies": {
-    "discord.js": "^14.21.0",
+    "discord.js": "^14.25.1",
     "dotenv": "^16.6.1",
     "openai": "^4.104.0",
     "signale": "^1.4.0"

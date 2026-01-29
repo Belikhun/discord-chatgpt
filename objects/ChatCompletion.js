@@ -71,6 +71,9 @@ export class ChatCompletion {
 		/** @type {Set<string>} */
 		this.toolCallsUsed = new Set();
 
+		/** @type {Map<string, "calling" | "success" | "error">} */
+		this.toolCallStatus = new Map();
+
 		/** @type {MediaGalleryBuilder} */
 		this.gallery = null;
 
@@ -110,7 +113,13 @@ export class ChatCompletion {
 
 		if (this.toolCallsUsed.size > 0) {
 			for (const toolName of this.toolCallsUsed) {
-				lines.push(`-# > :toolbox: Đã gọi: **${toolName}**`);
+				const status = this.toolCallStatus.get(toolName) || "calling";
+				const statusEmoji = (status === "success")
+					? emoji("acok")
+					: ((status === "error")
+						? emoji("acerror")
+						: emoji("ganyuroll", true));
+				lines.push(`-# > ${statusEmoji}  **${toolName}**`);
 			}
 		}
 
@@ -161,6 +170,7 @@ export class ChatCompletion {
 		this.log.info(`Chat completion started`);
 		this.originalMessage.channel.sendTyping();
 		this.toolCallsUsed.clear();
+		this.toolCallStatus.clear();
 
 		this.thinkingReply = await this.originalMessage.reply({
 			flags: MessageFlags.IsComponentsV2,
@@ -240,6 +250,8 @@ export class ChatCompletion {
 				message: this.originalMessage
 			});
 
+			this.markToolResults(toolCalls, toolOutputs);
+
 			this.conversation.history.push(...toolOutputs.map((item) => ({
 				...item,
 				timestamp: Date.now()
@@ -283,7 +295,7 @@ export class ChatCompletion {
 		for await (const event of response) {
 			const { type } = event;
 
-			this.log.debug(`Got chat completion event ${type}`);
+			// this.log.debug(`Got chat completion event ${type}`);
 
 			switch (type) {
 				case "response.reasoning_summary_text.delta": {
@@ -379,7 +391,7 @@ export class ChatCompletion {
 				}
 
 				default:
-					this.log.debug(event);
+					// this.log.debug(event);
 					break;
 			}
 		}
@@ -396,8 +408,41 @@ export class ChatCompletion {
 
 		if (!this.toolCallsUsed.has(toolName)) {
 			this.toolCallsUsed.add(toolName);
+			this.toolCallStatus.set(toolName, "calling");
 			this.deferUpdate();
 		}
+	}
+
+	markToolResults(toolCalls, toolOutputs) {
+		if (!Array.isArray(toolCalls) || !Array.isArray(toolOutputs))
+			return;
+
+		const outputByCallId = new Map();
+		for (const output of toolOutputs) {
+			if (output?.call_id)
+				outputByCallId.set(output.call_id, output);
+		}
+
+		for (const call of toolCalls) {
+			const toolName = call?.name;
+			const output = outputByCallId.get(call?.call_id);
+			let ok = false;
+
+			if (output?.output) {
+				try {
+					const parsed = JSON.parse(output.output);
+					ok = !!parsed?.ok;
+				} catch {
+					ok = false;
+				}
+			}
+
+			if (toolName) {
+				this.toolCallStatus.set(toolName, ok ? "success" : "error");
+			}
+		}
+
+		this.deferUpdate();
 	}
 
 	/**

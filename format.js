@@ -43,6 +43,9 @@ export function emojiID(name) {
 
 		case "resting":
 			return "1363928478109405314";
+
+		case "ganyuroll":
+			return "1466476428697665599";
 	}
 
 	return `0`;

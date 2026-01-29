@@ -44,6 +44,7 @@ export class ChatConversation {
 		this.skipStreak = 0;
 		this.chatActivated = false;
 		this.pendingProcess = false;
+		this.processing = false;
 		this.processTimer = null;
 		this.processDebounceMs = 1000;
 
@@ -170,6 +171,11 @@ export class ChatConversation {
 				return;
 			}
 
+			if (this.processing) {
+				this.scheduleProcess();
+				return;
+			}
+
 			try {
 				await this.respondFromHistory();
 			} catch (err) {
@@ -203,14 +209,13 @@ export class ChatConversation {
 	}
 
 	async respondFromHistory({ activateChat = true } = {}) {
-		const options = { tools: ChatTool.tools() };
-
-		if (this.isReasoningModel()) {
-			options.reasoning = {
-				effort: "low",
-				summary: "auto"
-			};
+		if (this.processing) {
+			this.pendingProcess = true;
+			return null;
 		}
+
+		this.processing = true;
+		const options = { tools: ChatTool.tools() };
 
 		let input = this.history.map((item) => {
 			const i = { ...item };
@@ -272,6 +277,9 @@ export class ChatConversation {
 			this.chatActivated = false;
 			this.skipStreak += 1;
 			this.log.info(`Response was [skip], not sending message.`);
+			this.processing = false;
+			if (this.pendingProcess)
+				this.scheduleProcess();
 			return null;
 		}
 
@@ -290,6 +298,9 @@ export class ChatConversation {
 
 		if (!canSend()) {
 			this.log.warn(`Missing SendMessages permission for channel ${this.channel.id}, skipping send.`);
+			this.processing = false;
+			if (this.pendingProcess)
+				this.scheduleProcess();
 			return null;
 		}
 
@@ -310,8 +321,15 @@ export class ChatConversation {
 			});
 		} catch (err) {
 			this.log.error(`Failed to send message to channel ${this.channel.id}: ${err.message}`);
+			this.processing = false;
+			if (this.pendingProcess)
+				this.scheduleProcess();
 			return null;
 		}
+
+		this.processing = false;
+		if (this.pendingProcess)
+			this.scheduleProcess();
 
 		return output_text;
 	}

@@ -390,27 +390,7 @@ export class ChatTool {
 		}
 
 		const message = await fromChannel.messages.fetch(messageId);
-		const authorName = message.member?.displayName || message.author.globalName || message.author.username;
-		const header = `Forwarded from ${authorName} (<@${message.author.id}>) in ${fromChannel.name ? `#${fromChannel.name}` : "DM"}`;
-
-		const files = (includeAttachments ?? true)
-			? Array.from(message.attachments.values()).map((attachment) => attachment.url)
-			: [];
-
-		const embeds = (includeEmbeds ?? true) ? message.embeds : [];
-
-		const payload = {
-			content: [header, message.content].filter(Boolean).join("\n"),
-			allowedMentions: { parse: [] }
-		};
-
-		if (files.length > 0)
-			payload.files = files;
-
-		if (embeds.length > 0)
-			payload.embeds = embeds;
-
-		const sent = await toChannel.send(payload);
+		const sent = await message.forward(toChannel);
 
 		return {
 			ok: true,

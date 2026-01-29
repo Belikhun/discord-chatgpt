@@ -366,24 +366,6 @@ export class ChatTool {
 			}
 		}
 
-		if (typeof emojiInput === "string" && /^\d+$/.test(emojiInput)) {
-			let resolved = null;
-			const guild = channel.guild || context?.conversation?.channel?.guild || null;
-			if (guild) {
-				resolved = guild.emojis.cache.get(emojiInput);
-				if (!resolved) {
-					resolved = await guild.emojis.fetch(emojiInput).catch(() => null);
-				}
-			}
-
-			if (!resolved) {
-				this.log.warn(`Emoji ID ${emojiInput} not found in guild ${guild?.id || "N/A"}`);
-				return { ok: false, error: "Emoji ID is not available to this bot in the current context." };
-			}
-
-			emojiInput = resolved;
-		}
-
 		const message = await channel.messages.fetch(messageId);
 		this.log.debug(`Reacting to message ${message.id} in channel ${channel.id} with emoji ${emojiInput}`);
 		await message.react(emojiInput);

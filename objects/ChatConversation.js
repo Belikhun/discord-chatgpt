@@ -71,9 +71,11 @@ export class ChatConversation {
 			" - The `message` field is the user's actual text; `replyingTo` gives reply context.",
 			"",
 			"The following custom emojis are available for use in responses (each separated by whitespace):",
+			"```",
 			Object.entries(ALL_EMOJIS)
-				.map(([name, [id, animated]]) => (animated) ? `<a:${name}:${id}>` : `<:${name}:${id}>`)
-				.join(" ")
+				.map(([name]) => `:${name}:`)
+				.join(" "),
+			"```"
 		);
 
 		/** @type {import("openai/resources/responses/responses.mjs").ResponseInput} */
@@ -206,7 +208,7 @@ export class ChatConversation {
 			};
 		}
 
-		const { output, output_text } = await openAI.responses.create({
+		let { output, output_text } = await openAI.responses.create({
 			model: this.model,
 			instructions: this.instructions,
 			input: this.history.map((item) => {
@@ -249,6 +251,17 @@ export class ChatConversation {
 			this.log.warn(`Missing SendMessages permission for channel ${this.channel.id}, skipping send.`);
 			return null;
 		}
+
+		// Replace emojis with actual Discord emoji syntax.
+		output_text = output_text.replaceAll(/:([a-zA-Z0-9_]+):/g, (match, p1) => {
+			const emojiData = ALL_EMOJIS[p1];
+			if (emojiData) {
+				const [emojiId, animated] = emojiData;
+				return `<${animated ? "a" : ""}:${p1}:${emojiId}>`;
+			}
+
+			return match;
+		});
 
 		try {
 			await this.channel.send({

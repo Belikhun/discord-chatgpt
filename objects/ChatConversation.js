@@ -279,7 +279,7 @@ export class ChatConversation {
 
 		const trimmed = output_text.trim();
 
-		if (trimmed === "[skip]" || trimmed === "`[skip]`" || trimmed.startsWith("[skip]")) {
+		if (trimmed.length === 0 || !trimmed || trimmed === "[skip]" || trimmed === "`[skip]`" || trimmed.startsWith("[skip]")) {
 			this.chatActivated = false;
 			this.skipStreak += 1;
 			this.log.info(`Response was [skip], not sending message.`);

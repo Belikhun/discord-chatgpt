@@ -19,7 +19,12 @@ export const ALL_EMOJIS = {
 	catthumbsup: ["1353648100958408765", false],
 	dogebonk: ["869520806672220210", false],
 	thonk: ["896015612688621609", false],
-	thinkies: ["1346155697494167573", false]
+	thinkies: ["1346155697494167573", false],
+	yaelicking: ["1461204738430468170", true],
+	renxHAH: ["1378754691407675452", false],
+	catUhh: ["1433663509312307351", false],
+	catExplode: ["1434528005903880204", true],
+	what: ["1445050239433314464", false]
 }
 
 /**

@@ -245,12 +245,15 @@ export class ChatCompletion {
 				break;
 			}
 
+			this.log.info(`Processing ${toolCalls.length} tool call(s).`);
+
 			const toolOutputs = await ChatTool.runToolCalls(toolCalls, {
 				conversation: this.conversation,
 				message: this.originalMessage
 			});
 
 			this.markToolResults(toolCalls, toolOutputs);
+			this.log.info(`Tool calls completed: ${toolCalls.map((call) => call.name).join(", ")}`);
 
 			this.conversation.history.push(...toolOutputs.map((item) => ({
 				...item,

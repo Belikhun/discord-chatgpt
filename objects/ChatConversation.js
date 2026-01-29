@@ -104,6 +104,7 @@ export class ChatConversation {
 	 */
 	async handle(message) {
 		this.purgeExpiredHistory();
+		this.log.info(`Handling message ${message.id} in channel ${message.channel.id}.`);
 
 		if (this.mode === "assistant") {
 			const chat = new ChatCompletion(this, message, this.model);
@@ -146,7 +147,7 @@ export class ChatConversation {
 			|| ((message.reference && message.reference.messageId) ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false);
 
 		if (!shouldProcess) {
-			this.log.info(`Message added to history, will not process this message.`);
+			this.log.info(`Message ${message.id} added to history, skipping processing.`);
 			this.skippedMessages += 1;
 			this.scheduleProcess();
 			return this;
@@ -154,6 +155,7 @@ export class ChatConversation {
 
 		this.skippedMessages = 0;
 		this.pendingProcess = true;
+		this.log.info(`Message ${message.id} queued for processing.`);
 		this.scheduleProcess();
 
 		return this;
@@ -172,11 +174,13 @@ export class ChatConversation {
 			}
 
 			if (this.processing) {
+				this.log.info(`Processing in progress, waiting to handle queued messages.`);
 				this.scheduleProcess();
 				return;
 			}
 
 			try {
+				this.log.info(`Processing queued messages in channel ${this.channel.id}.`);
 				await this.respondFromHistory();
 			} catch (err) {
 				this.log.error(`Failed to process debounced messages: ${err.message}`);
@@ -211,10 +215,12 @@ export class ChatConversation {
 	async respondFromHistory({ activateChat = true } = {}) {
 		if (this.processing) {
 			this.pendingProcess = true;
+			this.log.info(`Already processing, will handle pending messages after completion.`);
 			return null;
 		}
 
 		this.processing = true;
+		this.log.info(`Start processing response for channel ${this.channel.id}.`);
 		const options = { tools: ChatTool.tools() };
 
 		let input = this.history.map((item) => {
@@ -328,6 +334,7 @@ export class ChatConversation {
 		}
 
 		this.processing = false;
+		this.log.info(`Response sent to channel ${this.channel.id}.`);
 		if (this.pendingProcess)
 			this.scheduleProcess();
 

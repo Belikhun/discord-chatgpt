@@ -45,8 +45,6 @@ export class ChatConversation {
 		this.chatActivated = false;
 		this.pendingProcess = false;
 		this.processing = false;
-		this.processTimer = null;
-		this.processDebounceMs = 1000;
 
 		this.instructions += "\n" + lines(
 			"All messages come as structured JSON objects representing Discord messages.",
@@ -162,32 +160,19 @@ export class ChatConversation {
 	}
 
 	scheduleProcess() {
-		if (this.processTimer) {
-			clearTimeout(this.processTimer);
+		if (!this.pendingProcess)
+			return;
+
+		if (this.processing) {
+			this.log.info(`Processing in progress, waiting to handle queued messages.`);
+			return;
 		}
 
-		this.processTimer = setTimeout(async () => {
-			this.processTimer = null;
-
-			if (!this.pendingProcess) {
-				return;
-			}
-
-			if (this.processing) {
-				this.log.info(`Processing in progress, waiting to handle queued messages.`);
-				this.scheduleProcess();
-				return;
-			}
-
-			try {
-				this.log.info(`Processing queued messages in channel ${this.channel.id}.`);
-				await this.respondFromHistory();
-			} catch (err) {
-				this.log.error(`Failed to process debounced messages: ${err.message}`);
-			} finally {
-				this.pendingProcess = false;
-			}
-		}, this.processDebounceMs);
+		this.pendingProcess = false;
+		this.log.info(`Processing queued messages in channel ${this.channel.id}.`);
+		this.respondFromHistory().catch((err) => {
+			this.log.error(`Failed to process queued messages: ${err.message}`);
+		});
 	}
 
 	async handleStructuredPrompt(payload, { activateChat = true, role = "user" } = {}) {
@@ -220,6 +205,7 @@ export class ChatConversation {
 		}
 
 		this.processing = true;
+		this.pendingProcess = false;
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
 		const options = { tools: ChatTool.tools() };
 

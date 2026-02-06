@@ -66,7 +66,7 @@ export class ChatConversation {
 			" - Channel mention: <#{channel.id}>",
 			" - Markdown: *italic*, **bold**, `code`, ```blocks```",
 			" - Timestamps: <t:unix[:style]>",
-			" - Emojis: :emoji_name: or Unicode emoji",
+			" - Emojis: :emoji_name: or Unicode emoji. You may also use custom emojis seen from other users, but only in full Discord format (<:name:id> or <a:name:id>).",
 			"",
 			"Rules:",
 			" - Reply in plain text only — no JSON or structural output.",

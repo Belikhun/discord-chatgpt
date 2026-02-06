@@ -17,6 +17,8 @@ export const ALL_EMOJIS = {
 	catmiddlefinger: ["1187408817777020978", false],
 	catthumbsdown: ["1353648099096006697", false],
 	catthumbsup: ["1353648100958408765", false],
+	catKiss: ["923425661329240065", true],
+	browhat: ["1331531999411703893", false],
 	dogebonk: ["869520806672220210", false],
 	thonk: ["896015612688621609", false],
 	thinkies: ["1346155697494167573", false],
@@ -24,7 +26,21 @@ export const ALL_EMOJIS = {
 	renxHAH: ["1378754691407675452", false],
 	catUhh: ["1433663509312307351", false],
 	catExplode: ["1434528005903880204", true],
-	what: ["1445050239433314464", false]
+	what: ["1445050239433314464", false],
+	muhehehe: ["1445289930220765204", false],
+	catJAM: ["896780067433230408", true],
+	catJAMCry: ["923425660360355910", true],
+	dogewoweew: ["864684144835559444", false],
+	renxBARK: ["1440924589252411433", true],
+	renxAAAA: ["1468528377169182801", true],
+	renxLOOKDOWN: ["1381957356807651410", true],
+	takE: ["868140125736017990", false],
+	renxPLEAD: ["1468528682426564689", true],
+	renxNOW: ["1468531545089376266", true],
+	renxNERD: ["1378754881074106499", true],
+	renxBARK: ["1440924589252411433", true],
+	renxAWW: ["1440924723197378621", true],
+	yaelicking: ["1461204738430468170", true],
 }
 
 /**

@@ -39,7 +39,7 @@ export const ALL_EMOJIS = {
 	renxNOW: ["1468531545089376266", true],
 	renxNERD: ["1378754881074106499", true],
 	renxBARK: ["1440924589252411433", true],
-	renxAWW: ["1440924723197378621", true],
+	renxAWW: ["1440924723197378621", false],
 	yaelicking: ["1461204738430468170", true],
 }
 

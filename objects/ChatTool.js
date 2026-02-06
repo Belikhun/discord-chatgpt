@@ -5,6 +5,7 @@ import { scope } from "../logger.js";
 import { ALL_EMOJIS } from "../utils.js";
 import { listConversations as listStoredConversations } from "../store/conversation.js";
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
+import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
 
 export class ChatTool {
 	static log = scope("chat-tool");
@@ -345,6 +346,85 @@ export class ChatTool {
 					required: ["guildId", "query", "limit", "scanLimit", "channelLimit", "sortBy", "sortOrder", "authorIds", "mentions", "channelIds", "minId", "maxId", "offset", "pinned", "includeNsfw"],
 					additionalProperties: false
 				}
+			},
+			{
+				type: "function",
+				name: "minecraft_wiki_search",
+				description: "Search the Minecraft Wiki for pages matching a query.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						query: {
+							type: "string",
+							description: "Search query for the wiki."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of results to return."
+						}
+					},
+					required: ["query", "limit"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "minecraft_wiki_search_content",
+				description: "Search the content of a Minecraft Wiki page (cached locally after first fetch).",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						pageId: {
+							type: ["number", "null"],
+							description: "Page ID to search."
+						},
+						title: {
+							type: ["string", "null"],
+							description: "Page title to search."
+						},
+						query: {
+							type: "string",
+							description: "Search query to match in page content."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of matched lines to return."
+						}
+					},
+					required: ["pageId", "title", "query", "limit"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "minecraft_wiki_read_content",
+				description: "Read cached Minecraft Wiki content by line range.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						pageId: {
+							type: ["number", "null"],
+							description: "Page ID to read."
+						},
+						title: {
+							type: ["string", "null"],
+							description: "Page title to read."
+						},
+						startLine: {
+							type: ["number", "null"],
+							description: "Start line number (1-based)."
+						},
+						endLine: {
+							type: ["number", "null"],
+							description: "End line number (1-based)."
+						}
+					},
+					required: ["pageId", "title", "startLine", "endLine"],
+					additionalProperties: false
+				}
 			}
 		];
 	}
@@ -410,6 +490,15 @@ export class ChatTool {
 
 				case "search_messages":
 					return this.wrapToolOutput(call_id, await this.searchMessages(args, context));
+
+				case "minecraft_wiki_search":
+					return this.wrapToolOutput(call_id, await this.minecraftWikiSearch(args));
+
+				case "minecraft_wiki_search_content":
+					return this.wrapToolOutput(call_id, await this.minecraftWikiSearchContent(args));
+
+				case "minecraft_wiki_read_content":
+					return this.wrapToolOutput(call_id, await this.minecraftWikiReadContent(args));
 
 				default:
 					return this.wrapToolOutput(call_id, {
@@ -931,5 +1020,53 @@ export class ChatTool {
 			}));
 
 		return { ok: true, count: items.length, total: data?.total_results ?? items.length, items };
+	}
+
+	static async minecraftWikiSearch({ query, limit }) {
+		try {
+			return await searchWiki(query, { limit });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+	}
+
+	static async minecraftWikiSearchContent({ pageId, title, query, limit }) {
+		try {
+			return await searchWikiContent({ pageId, title, query, limit });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+	}
+
+	static async minecraftWikiReadContent({ pageId, title, startLine, endLine }) {
+		try {
+			return await readWikiContent({ pageId, title, startLine, endLine });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+	}
+
+	static async minecraftWikiSearch({ query, limit }) {
+		try {
+			return await searchWiki(query, { limit });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+	}
+
+	static async minecraftWikiSearchContent({ pageId, title, query, limit }) {
+		try {
+			return await searchWikiContent({ pageId, title, query, limit });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+	}
+
+	static async minecraftWikiReadContent({ pageId, title, startLine, endLine }) {
+		try {
+			return await readWikiContent({ pageId, title, startLine, endLine });
+		} catch (err) {
+			return { ok: false, error: err?.message || String(err) };
+		}
 	}
 }

@@ -297,39 +297,7 @@ export class ChatConversation {
 			return null;
 		}
 
-		// Replace :name: codes while leaving existing custom emoji syntax intact.
-		const protectedEmojis = [];
-		let replacedEmojis = 0;
-		let unknownEmojis = 0;
-		output_text = output_text.replaceAll(/<a?:[a-zA-Z0-9_-]+:\d+>/g, (match) => {
-			const index = protectedEmojis.length;
-			protectedEmojis.push(match);
-			return `__CUSTOM_EMOJI_${index}__`;
-		});
-
-		output_text = output_text.replaceAll(/:([a-zA-Z0-9_-]+):/gi, (match, name) => {
-			this.log.debug(`Processing emoji code: ${name}`);
-			const lookup = ALL_EMOJIS[name] || ALL_EMOJIS[name?.toLowerCase() || ""];
-			const resolvedName = ALL_EMOJIS[name] ? name : name?.toLowerCase();
-
-			if (lookup) {
-				this.log.debug(`Resolved emoji :${name}: to ID ${lookup[0]}`);
-				const [emojiId, animated] = lookup;
-				replacedEmojis += 1;
-				return `<${animated ? "a" : ""}:${resolvedName}:${emojiId}>`;
-			}
-
-			unknownEmojis += 1;
-			this.log.debug(`Unknown emoji code: :${name}:`);
-			return match;
-		});
-
-		output_text = output_text.replaceAll(/__CUSTOM_EMOJI_(\d+)__/g, (match, index) => {
-			const restored = protectedEmojis[Number(index)];
-			return restored || match;
-		});
-
-		this.log.debug(`Emoji replace stats: protected=${protectedEmojis.length}, replaced=${replacedEmojis}, unknown=${unknownEmojis}`);
+		output_text = this.processOutputEmojis(output_text);
 
 		try {
 			await this.channel.send({
@@ -349,6 +317,45 @@ export class ChatConversation {
 			this.scheduleProcess();
 
 		return output_text;
+	}
+
+	processOutputEmojis(text) {
+		if (!text)
+			return text;
+
+		const protectedEmojis = [];
+		let replacedEmojis = 0;
+		let unknownEmojis = 0;
+		let output = text.replaceAll(/<a?:[a-zA-Z0-9_-]+:\d+>/g, (match) => {
+			const index = protectedEmojis.length;
+			protectedEmojis.push(match);
+			return `__CUSTOM_EMOJI_${index}__`;
+		});
+
+		output = output.replaceAll(/:([a-zA-Z0-9_-]+):/gi, (match, name) => {
+			this.log.debug(`Processing emoji code: ${name}`);
+			const lookup = ALL_EMOJIS[name] || ALL_EMOJIS[name?.toLowerCase() || ""];
+			const resolvedName = ALL_EMOJIS[name] ? name : name?.toLowerCase();
+
+			if (lookup) {
+				this.log.debug(`Resolved emoji :${name}: to ID ${lookup[0]}`);
+				const [emojiId, animated] = lookup;
+				replacedEmojis += 1;
+				return `<${animated ? "a" : ""}:${resolvedName}:${emojiId}>`;
+			}
+
+			unknownEmojis += 1;
+			this.log.debug(`Unknown emoji code: :${name}:`);
+			return match;
+		});
+
+		output = output.replaceAll(/__CUSTOM_EMOJI_(\d+)__/g, (match, index) => {
+			const restored = protectedEmojis[Number(index)];
+			return restored || match;
+		});
+
+		this.log.debug(`Emoji replace stats: protected=${protectedEmojis.length}, replaced=${replacedEmojis}, unknown=${unknownEmojis}`);
+		return output;
 	}
 
 	extractOutputText(output = []) {

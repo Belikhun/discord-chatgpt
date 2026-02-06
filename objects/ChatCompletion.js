@@ -683,8 +683,12 @@ export class ChatCompletion {
 			const textContent = new TextDisplayBuilder();
 			components.push(textContent);
 
-			if (this.responses[this.responseIndex])
-				textContent.setContent(this.responses[this.responseIndex]);
+			if (this.responses[this.responseIndex]) {
+				const processed = this.conversation?.processOutputEmojis
+					? this.conversation.processOutputEmojis(this.responses[this.responseIndex])
+					: this.responses[this.responseIndex];
+				textContent.setContent(processed);
+			}
 
 			if (this.sendNextMessage) {
 				this.currentResponse.edit({
@@ -708,7 +712,10 @@ export class ChatCompletion {
 				content += `\``;
 			}
 
-			textContent.setContent(content);
+			const processed = this.conversation?.processOutputEmojis
+				? this.conversation.processOutputEmojis(content)
+				: content;
+			textContent.setContent(processed);
 			const footer = new TextDisplayBuilder().setContent(this.footer());
 			components.push(footer);
 

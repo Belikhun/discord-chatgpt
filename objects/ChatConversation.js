@@ -355,6 +355,7 @@ export class ChatConversation {
 		});
 
 		this.log.debug(`Emoji replace stats: protected=${protectedEmojis.length}, replaced=${replacedEmojis}, unknown=${unknownEmojis}`);
+		this.log.debug(`Final output after emoji processing: ${output}`);
 		return output;
 	}
 

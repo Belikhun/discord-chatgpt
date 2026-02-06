@@ -222,10 +222,11 @@ export class ChatCompletion {
 		});
 
 		let pass = 0;
+		const maxPasses = 10;
 		let finalResponse = null;
 		let toolCalls = [];
 
-		while (pass < 3) {
+		while (pass < maxPasses) {
 			const result = await this.runResponseStream({
 				input,
 				options
@@ -242,6 +243,12 @@ export class ChatCompletion {
 			}
 
 			if (!toolCalls || toolCalls.length === 0) {
+				break;
+			}
+
+			pass += 1;
+			if (pass >= maxPasses) {
+				this.log.warn(`Tool loop reached max passes (${maxPasses}), stopping further tool calls.`);
 				break;
 			}
 
@@ -271,7 +278,6 @@ export class ChatCompletion {
 				return cloned;
 			});
 			input = input.concat(sanitizedOutput, sanitizedToolOutputs);
-			pass += 1;
 		}
 
 		if (!this.inResponse && this.responses.length === 0 && this.responseBuffer.trim().length === 0) {

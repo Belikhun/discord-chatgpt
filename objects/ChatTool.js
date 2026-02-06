@@ -2,14 +2,12 @@ import { ChannelType } from "discord.js";
 import { discord } from "../clients/discord.js";
 import { getChannel, getGuild, getUser } from "../clients/discord.js";
 import { scope } from "../logger.js";
-import fs from "node:fs";
-import path from "node:path";
 import { ALL_EMOJIS } from "../utils.js";
+import { listConversations as listStoredConversations } from "../store/conversation.js";
+import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
 
 export class ChatTool {
 	static log = scope("chat-tool");
-	static memoryFilePath = path.join(process.cwd(), "data", "memories.json");
-	static memoryTtlMs = 86400000;
 
 	static tools() {
 		return [
@@ -149,7 +147,7 @@ export class ChatTool {
 			{
 				type: "function",
 				name: "create_memory",
-				description: "Create a short-term memory item in the server's memory bank (expires in 1 day).",
+				description: "Create a short-term memory item in the server's memory bank with an optional custom expiration duration (in seconds).",
 				strict: true,
 				parameters: {
 					type: "object",
@@ -161,9 +159,76 @@ export class ChatTool {
 						content: {
 							type: "string",
 							description: "Memory content to store."
+						},
+						ttlSeconds: {
+							type: ["number", "null"],
+							description: "Expiration duration in seconds. If null, use the default duration."
 						}
 					},
-					required: ["guildId", "content"],
+					required: ["guildId", "content", "ttlSeconds"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "list_conversations",
+				description: "List stored chat conversations for other channels (in-memory history).",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to filter. If null, use the current server when available."
+						},
+						includeCurrent: {
+							type: ["boolean", "null"],
+							description: "Include the current channel in results. Default false."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of conversations to return."
+						}
+					},
+					required: ["guildId", "includeCurrent", "limit"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "search_conversation_history",
+				description: "Search in-memory ChatConversation history across other channels.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to filter. If null, use the current server when available."
+						},
+						channelIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional list of channel IDs to search. If null, search all stored channels."
+						},
+						query: {
+							type: "string",
+							description: "Search text to match in stored conversation history."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of matched entries to return."
+						},
+						maxPerChannel: {
+							type: ["number", "null"],
+							description: "Maximum results per channel."
+						},
+						includeCurrent: {
+							type: ["boolean", "null"],
+							description: "Include the current channel in search. Default false."
+						}
+					},
+					required: ["guildId", "channelIds", "query", "limit", "maxPerChannel", "includeCurrent"],
 					additionalProperties: false
 				}
 			},
@@ -330,6 +395,12 @@ export class ChatTool {
 
 				case "create_memory":
 					return this.wrapToolOutput(call_id, await this.createMemory(args, context));
+
+				case "list_conversations":
+					return this.wrapToolOutput(call_id, await this.listConversations(args, context));
+
+				case "search_conversation_history":
+					return this.wrapToolOutput(call_id, await this.searchConversationHistory(args, context));
 
 				case "list_emojis":
 					return this.wrapToolOutput(call_id, await this.listEmojis(args));
@@ -563,104 +634,153 @@ export class ChatTool {
 		return info;
 	}
 
-	static ensureMemoryStore() {
-		if (!fs.existsSync(this.memoryFilePath)) {
-			fs.mkdirSync(path.dirname(this.memoryFilePath), { recursive: true });
-			fs.writeFileSync(this.memoryFilePath, "{}", "utf8");
-		}
-	}
-
-	static loadMemoryStore() {
-		this.ensureMemoryStore();
-		try {
-			const raw = fs.readFileSync(this.memoryFilePath, "utf8");
-			return JSON.parse(raw || "{}");
-		} catch (err) {
-			this.log.error(`Failed to read memories.json: ${err.message}`);
-			return {};
-		}
-	}
-
-	static saveMemoryStore(store) {
-		this.ensureMemoryStore();
-		fs.writeFileSync(this.memoryFilePath, JSON.stringify(store, null, 2), "utf8");
-	}
-
-	static purgeExpiredMemories(store) {
-		let changed = false;
-		const now = Date.now();
-
-		for (const guildId of Object.keys(store)) {
-			const items = Array.isArray(store[guildId]) ? store[guildId] : [];
-			const fresh = items.filter((item) => (item?.expiresAt ?? 0) > now);
-			if (fresh.length !== items.length) {
-				store[guildId] = fresh;
-				changed = true;
-			}
-		}
-
-		return changed;
-	}
-
 	static async listMemories({ guildId, query, limit }, context) {
 		const guild = await this.resolveGuild(guildId, context);
 		if (!guild) {
 			return { ok: false, error: "Guild not found or not available in this context." };
 		}
 
-		const store = this.loadMemoryStore();
-		const changed = this.purgeExpiredMemories(store);
-		if (changed)
-			this.saveMemoryStore(store);
-
-		let items = Array.isArray(store[guild.id]) ? store[guild.id] : [];
-		if (query) {
-			const needle = query.toLowerCase();
-			items = items.filter((item) => (item?.content || "").toLowerCase().includes(needle));
-		}
-
-		items = items.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-		const max = Math.max(1, Math.min(100, limit ?? 20));
-		const sliced = items.slice(0, max);
-
-		return {
-			ok: true,
-			total: items.length,
-			items: sliced
-		};
+		return listMemoriesForGuild(guild, { query, limit });
 	}
 
-	static async createMemory({ guildId, content }, context) {
+	static async createMemory({ guildId, content, ttlSeconds }, context) {
 		const guild = await this.resolveGuild(guildId, context);
 		if (!guild) {
 			return { ok: false, error: "Guild not found or not available in this context." };
 		}
 
-		const trimmed = (content || "").trim();
-		if (!trimmed) {
-			return { ok: false, error: "Memory content cannot be empty." };
+		return createMemoryForGuild(guild, { content, ttlSeconds, context });
+	}
+
+	static extractConversationTexts(item) {
+		const texts = [];
+		if (!item)
+			return texts;
+
+		const content = item.content;
+		if (Array.isArray(content)) {
+			for (const part of content) {
+				if (part?.type === "input_text" && typeof part.text === "string")
+					texts.push(part.text);
+				if (part?.type === "output_text" && typeof part.text === "string")
+					texts.push(part.text);
+			}
+		} else if (typeof content === "string") {
+			texts.push(content);
 		}
 
-		const store = this.loadMemoryStore();
-		this.purgeExpiredMemories(store);
-		if (!store[guild.id])
-			store[guild.id] = [];
+		return texts;
+	}
 
-		const now = Date.now();
-		const item = {
-			id: `${guild.id}-${now}-${Math.random().toString(36).slice(2, 8)}`,
-			content: trimmed,
-			createdAt: now,
-			expiresAt: now + this.memoryTtlMs,
-			authorId: context?.message?.author?.id || null,
-			channelId: context?.message?.channel?.id || null,
-			messageId: context?.message?.id || null
-		};
+	static async listConversations({ guildId, includeCurrent, limit }, context) {
+		const guild = await this.resolveGuild(guildId, context);
+		if (guildId && !guild) {
+			return { ok: false, error: "Guild not found or not available in this context." };
+		}
 
-		store[guild.id].push(item);
-		this.saveMemoryStore(store);
+		const currentChannelId = context?.conversation?.channel?.id || null;
+		const includeSelf = Boolean(includeCurrent);
+		const max = Math.max(1, Math.min(100, Math.floor(limit ?? 50)));
 
-		return { ok: true, item };
+		const items = listStoredConversations()
+			.filter((conversation) => {
+				if (!conversation?.channel)
+					return false;
+				if (!includeSelf && conversation.channel.id === currentChannelId)
+					return false;
+				if (guild?.id && conversation.channel.guild?.id !== guild.id)
+					return false;
+				return true;
+			})
+			.map((conversation) => {
+				const history = Array.isArray(conversation.history) ? conversation.history : [];
+				const lastItem = history.length ? history[history.length - 1] : null;
+				return {
+					channelId: conversation.channel.id,
+					channelName: conversation.channel.name || null,
+					guildId: conversation.channel.guild?.id || null,
+					mode: conversation.mode,
+					model: conversation.model,
+					historyCount: history.length,
+					lastMessageAt: lastItem?.timestamp ?? null,
+					processing: Boolean(conversation.processing)
+				};
+			})
+			.sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
+
+		return { ok: true, count: items.length, items: items.slice(0, max) };
+	}
+
+	static async searchConversationHistory({
+		guildId,
+		channelIds,
+		query,
+		limit,
+		maxPerChannel,
+		includeCurrent
+	}, context) {
+		const guild = await this.resolveGuild(guildId, context);
+		if (guildId && !guild) {
+			return { ok: false, error: "Guild not found or not available in this context." };
+		}
+
+		const needle = (query || "").trim();
+		if (!needle)
+			return { ok: false, error: "Search query cannot be empty." };
+
+		const currentChannelId = context?.conversation?.channel?.id || null;
+		const includeSelf = Boolean(includeCurrent);
+		const maxTotal = Math.max(1, Math.min(200, Math.floor(limit ?? 50)));
+		const maxEach = Math.max(1, Math.min(50, Math.floor(maxPerChannel ?? 10)));
+		const allowedIds = Array.isArray(channelIds) ? new Set(channelIds.filter(Boolean)) : null;
+		const lowerNeedle = needle.toLowerCase();
+
+		const results = [];
+		for (const conversation of listStoredConversations()) {
+			if (!conversation?.channel)
+				continue;
+			if (!includeSelf && conversation.channel.id === currentChannelId)
+				continue;
+			if (guild?.id && conversation.channel.guild?.id !== guild.id)
+				continue;
+			if (allowedIds && !allowedIds.has(conversation.channel.id))
+				continue;
+
+			const history = Array.isArray(conversation.history) ? conversation.history : [];
+			let perChannelCount = 0;
+			for (const item of history) {
+				if (perChannelCount >= maxEach || results.length >= maxTotal)
+					break;
+
+				const texts = this.extractConversationTexts(item);
+				for (const text of texts) {
+					if (perChannelCount >= maxEach || results.length >= maxTotal)
+						break;
+
+					if (typeof text !== "string")
+						continue;
+
+					const lowerText = text.toLowerCase();
+					if (!lowerText.includes(lowerNeedle))
+						continue;
+
+					const excerpt = text.length > 500 ? `${text.slice(0, 497)}...` : text;
+					results.push({
+						channelId: conversation.channel.id,
+						channelName: conversation.channel.name || null,
+						guildId: conversation.channel.guild?.id || null,
+						role: item?.role || null,
+						timestamp: item?.timestamp ?? null,
+						text: excerpt
+					});
+					perChannelCount += 1;
+				}
+			}
+			if (results.length >= maxTotal)
+				break;
+		}
+
+		return { ok: true, count: results.length, items: results };
 	}
 
 	static async listEmojis({ query } = {}) {

@@ -49,6 +49,7 @@ export class ChatConversation {
 		this.instructions += "\n" + lines(
 			"All messages come as structured JSON objects representing Discord messages.",
 			"Interpret them as chat input — respond naturally in plain text following Discord conventions.",
+			"Use available tools when you need more surrounding context (recent messages, server info, emojis, or memory).",
 			"",
 			"Schema:",
 			'{ "currentChannel": { "id": string, "name": string },',
@@ -297,7 +298,7 @@ export class ChatConversation {
 		}
 
 		// Replace emojis with actual Discord emoji syntax.
-		output_text = output_text.replaceAll(/:([a-zA-Z0-9_]+):/g, (match, p1) => {
+		output_text = output_text.replaceAll(/:([a-zA-Z0-9_-]+):/g, (match, p1) => {
 			const emojiData = ALL_EMOJIS[p1];
 			if (emojiData) {
 				const [emojiId, animated] = emojiData;

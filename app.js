@@ -4,6 +4,7 @@ import { discord, authenticateDiscordClient } from "./clients/discord.js";
 import { bold, code, emoji } from "./format.js";
 import config from "./config/config.js";
 import { ChatConversation } from "./objects/ChatConversation.js";
+import { getConversation, setConversation } from "./store/conversation.js";
 
 import { models } from "./clients/openai.js";
 import env from "./env.json" with { type: "json" };
@@ -26,9 +27,7 @@ const {
 	WELCOME_INSTRUCTION_SERVER
 } = env;
 
-/** @type {{[channelId: string]: ChatConversation}} */
-const conversations = {};
-
+// Conversations are stored in a shared registry (conversationStore).
 //* ===========================================================
 //*  Register commands
 //* -----------------------------------------------------------
@@ -169,9 +168,47 @@ function buildErrorEmbed(error, { actorName, actorIcon } = {}) {
 	return embed;
 }
 
+function applyMemorySummary(conversation) {
+	const guildId = conversation?.channel?.guild?.id;
+	if (!guildId)
+		return;
+
+	const summaries = config.get("memorySummaries", {});
+	const summary = summaries?.[guildId];
+	if (!summary)
+		return;
+
+	const history = Array.isArray(conversation.history) ? conversation.history : [];
+	const prefix = "Memory summary:";
+	const text = `${prefix}\n${summary}`;
+
+	const isSummaryEntry = (entry) => {
+		if (!entry || entry.role !== "developer")
+			return false;
+
+		const content = Array.isArray(entry.content)
+			? entry.content.map((part) => part?.text || "").join("\n")
+			: (entry.content || "");
+		return content.startsWith(prefix);
+	};
+
+	const existingIndex = history.findIndex(isSummaryEntry);
+	if (existingIndex >= 0)
+		history.splice(existingIndex, 1);
+
+	history.unshift({
+		role: "developer",
+		content: [{ type: "input_text", text }],
+		timestamp: Date.now()
+	});
+
+	conversation.history = history;
+}
+
 function resolveConversation(channel, { modeOverride } = {}) {
-	if (conversations[channel.id])
-		return conversations[channel.id];
+	const existing = getConversation(channel.id);
+	if (existing)
+		return existing;
 
 	const model = config.get(`model.${channel.id}`, MODEL_DEFAULT);
 	const mode = modeOverride ?? config.get(`mode.${channel.id}`, (channel instanceof DMChannel) ? "assistant" : "chat");
@@ -202,7 +239,8 @@ function resolveConversation(channel, { modeOverride } = {}) {
 	});
 
 	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
-	conversations[channel.id] = conversation;
+	applyMemorySummary(conversation);
+	setConversation(channel.id, conversation);
 
 	return conversation;
 }
@@ -295,8 +333,8 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 	try {
 		switch (interaction.commandName) {
 			case "clear": {
-				const count = conversations[interaction.channelId]?.history.length || 0;
-				conversations[interaction.channelId] = null;
+				const count = getConversation(interaction.channelId)?.history.length || 0;
+				setConversation(interaction.channelId, null);
 
 				await interaction.reply({
 					content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`
@@ -316,7 +354,7 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				}
 
 				const model = interaction.options.getString("model", true);
-				conversations[interaction.channelId] = null;
+				setConversation(interaction.channelId, null);
 				config.set(`model.${interaction.channelId}`, model);
 
 				await interaction.reply({
@@ -337,7 +375,7 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				}
 
 				const mode = interaction.options.getString("mode", true);
-				conversations[interaction.channelId] = null;
+				setConversation(interaction.channelId, null);
 				config.set(`mode.${interaction.channelId}`, mode);
 
 				await interaction.reply({
@@ -414,8 +452,8 @@ discord.on(Events.MessageCreate, async (message) => {
 		return;
 
 	if (message.content.startsWith("*clear") || message.content.startsWith("/clear")) {
-		const count = conversations[message.channelId]?.history.length || 0;
-		conversations[message.channelId] = null;
+		const count = getConversation(message.channelId)?.history.length || 0;
+		setConversation(message.channelId, null);
 
 		await message.reply({
 			content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`

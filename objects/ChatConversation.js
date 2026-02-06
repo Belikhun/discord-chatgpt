@@ -297,12 +297,17 @@ export class ChatConversation {
 			return null;
 		}
 
-		// Replace emojis with actual Discord emoji syntax.
-		output_text = output_text.replaceAll(/:([a-zA-Z0-9_-]+):/g, (match, p1) => {
-			const emojiData = ALL_EMOJIS[p1];
+		// Replace :name: codes while leaving existing custom emoji syntax intact.
+		output_text = output_text.replaceAll(/(<a?:[a-zA-Z0-9_-]+:\d+>|:([a-zA-Z0-9_-]+):)/g, (match, name) => {
+			if (match.startsWith("<"))
+				return match;
+
+			const lookup = ALL_EMOJIS[name] || ALL_EMOJIS[name?.toLowerCase() || ""];
+			const resolvedName = ALL_EMOJIS[name] ? name : name?.toLowerCase();
+			const emojiData = lookup;
 			if (emojiData) {
 				const [emojiId, animated] = emojiData;
-				return `<${animated ? "a" : ""}:${p1}:${emojiId}>`;
+				return `<${animated ? "a" : ""}:${resolvedName}:${emojiId}>`;
 			}
 
 			return match;

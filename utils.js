@@ -27,7 +27,7 @@ export const ALL_EMOJIS = {
 	catUhh: ["1477852678703939584", false],
 	catExplode: ["1477853754282737875", true],
 	what: ["1477854489762599024", false],
-	muhehehe: ["1445289930220765204", false],
+	muhehehe: ["1468076348458405980", false],
 	catJAM: ["896780067433230408", true],
 	catJAMCry: ["923425660360355910", true],
 	catHuhu: ["1477854150875418814", false],
@@ -41,7 +41,6 @@ export const ALL_EMOJIS = {
 	renxNERD: ["1378754881074106499", true],
 	renxBARK: ["1440924589252411433", true],
 	renxAWW: ["1440924723197378621", false],
-	yaelicking: ["1461204738430468170", true],
 }
 
 /**

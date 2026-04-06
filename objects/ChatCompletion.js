@@ -80,6 +80,8 @@ export class ChatCompletion {
 		/** @type {Map<string, number>} */
 		this.toolTimelineIndex = new Map();
 
+		this.toolInvocationCounter = 0;
+
 		/** @type {?number} */
 		this.reasoningTimelineIndex = null;
 
@@ -187,8 +189,12 @@ export class ChatCompletion {
 		};
 
 		for (const entry of this.timelineEntries) {
-			if (entry.type === "reasoning")
+			if (entry.type === "reasoning") {
+				flushToolLines();
+				if (entry.status === "thinking" && entry.detail)
+					sections.push(`-# > ${entry.detail}`);
 				continue;
+			}
 
 			if (entry.type === "assistant") {
 				flushToolLines();
@@ -439,7 +445,7 @@ export class ChatCompletion {
 							...event.item,
 							arguments: event.item.arguments || ""
 						};
-						this.markToolCalled(event.item.name);
+						this.markToolCalled(event.item);
 					}
 					break;
 				}
@@ -527,24 +533,29 @@ export class ChatCompletion {
 		};
 	}
 
-	markToolCalled(toolName) {
+	markToolCalled(tool) {
+		const toolName = (typeof tool === "string") ? tool : tool?.name;
 		if (!toolName)
 			return;
 
-		if (!this.toolCallsUsed.has(toolName)) {
-			if (this.inResponse)
-				this.commitAssistantBuffer();
+		const toolKey = (typeof tool === "object" && tool?.call_id)
+			? tool.call_id
+			: `${toolName}-${this.toolInvocationCounter++}`;
 
+		if (this.inResponse)
+			this.commitAssistantBuffer();
+
+		if (!this.toolCallsUsed.has(toolName))
 			this.toolCallsUsed.add(toolName);
-			this.toolCallStatus.set(toolName, "calling");
-			this.toolTimelineIndex.set(toolName, this.pushTimelineEntry({
-				type: "tool",
-				title: `Gọi công cụ ${toolName}`,
-				detail: "Đang chờ kết quả...",
-				status: "calling"
-			}));
-			this.deferUpdate();
-		}
+
+		this.toolCallStatus.set(toolName, "calling");
+		this.toolTimelineIndex.set(toolKey, this.pushTimelineEntry({
+			type: "tool",
+			title: `Gọi công cụ ${toolName}`,
+			detail: "Đang chờ kết quả...",
+			status: "calling"
+		}));
+		this.deferUpdate();
 	}
 
 	markToolResults(toolCalls, toolOutputs) {
@@ -559,6 +570,7 @@ export class ChatCompletion {
 
 		for (const call of toolCalls) {
 			const toolName = call?.name;
+			const toolKey = call?.call_id || toolName;
 			const output = outputByCallId.get(call?.call_id);
 			let ok = false;
 
@@ -573,7 +585,7 @@ export class ChatCompletion {
 
 			if (toolName) {
 				this.toolCallStatus.set(toolName, ok ? "success" : "error");
-				const timelineIndex = this.toolTimelineIndex.get(toolName);
+				const timelineIndex = this.toolTimelineIndex.get(toolKey);
 				if (typeof timelineIndex === "number") {
 					this.updateTimelineEntry(timelineIndex, {
 						detail: ok ? "Thực thi thành công." : "Thực thi thất bại hoặc trả về lỗi.",

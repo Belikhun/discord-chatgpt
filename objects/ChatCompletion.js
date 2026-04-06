@@ -176,12 +176,22 @@ export class ChatCompletion {
 	buildStreamingMessageContent(content = "") {
 		const sections = [];
 		const trimmedContent = (content || "").trim();
+		let toolLines = [];
+
+		const flushToolLines = () => {
+			if (toolLines.length === 0)
+				return;
+
+			sections.push(toolLines.join("\n"));
+			toolLines = [];
+		};
 
 		for (const entry of this.timelineEntries) {
 			if (entry.type === "reasoning")
 				continue;
 
 			if (entry.type === "assistant") {
+				flushToolLines();
 				if (entry.text)
 					sections.push(entry.text);
 				continue;
@@ -193,9 +203,11 @@ export class ChatCompletion {
 					: ((entry.status === "error")
 						? emoji("acerror")
 						: emoji("ganyuroll", true));
-				sections.push(`-# > ${statusEmoji}  **${entry.title}**`);
+				toolLines.push(`-# > ${statusEmoji}  **${entry.title}**`);
 			}
 		}
+
+		flushToolLines();
 
 		if (trimmedContent.length > 0)
 			sections.push(trimmedContent);

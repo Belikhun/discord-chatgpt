@@ -193,10 +193,7 @@ export class ChatCompletion {
 					: ((entry.status === "error")
 						? emoji("acerror")
 						: emoji("ganyuroll", true));
-				const lines = [`- ${statusEmoji} **${entry.title}**`];
-				if (entry.detail)
-					lines.push(`-# ${entry.detail}`);
-				sections.push(lines.join("\n"));
+				sections.push(`-# > ${statusEmoji}  **${entry.title}**`);
 			}
 		}
 

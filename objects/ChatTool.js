@@ -5,7 +5,7 @@ import { scope } from "../logger.js";
 import { ALL_EMOJIS } from "../utils.js";
 import { listConversations as listStoredConversations } from "../store/conversation.js";
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
-import { getModerationProfile, recordModerationAction } from "../store/moderation.js";
+import { getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory } from "../store/moderation.js";
 import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
 
 export class ChatTool {
@@ -475,6 +475,12 @@ export class ChatTool {
 				case "ban_user":
 					return this.wrapToolOutput(call_id, await this.banUser(args, context));
 
+				case "query_guild_moderation":
+					return this.wrapToolOutput(call_id, await this.queryGuildModeration(args, context));
+
+				case "get_moderation_history":
+					return this.wrapToolOutput(call_id, await this.getGuildModerationHistory(args, context));
+
 				case "get_user_info":
 					return this.wrapToolOutput(call_id, await this.getUserInfo(args, context));
 
@@ -676,6 +682,61 @@ export class ChatTool {
 					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
 					additionalProperties: false
 				}
+			},
+			{
+				type: "function",
+				name: "query_guild_moderation",
+				description: "Query guild-wide moderation records for warnings, kicks, and bans.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to query. If null, use the current guild."
+						},
+						actionFilter: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional action filters using any of: warning, kick, ban."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of tracked users to return."
+						}
+					},
+					required: ["guildId", "actionFilter", "limit"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "get_moderation_history",
+				description: "Retrieve the moderation history log for the guild, optionally filtered by user or action.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to query. If null, use the current guild."
+						},
+						userId: {
+							type: ["string", "null"],
+							description: "Optional target user ID to filter history."
+						},
+						action: {
+							type: ["string", "null"],
+							description: "Optional action filter: warning, kick, ban, or delete_messages."
+						},
+						limit: {
+							type: ["number", "null"],
+							description: "Maximum number of history entries to return."
+						}
+					},
+					required: ["guildId", "userId", "action", "limit"],
+					additionalProperties: false
+				}
 			}
 		];
 	}
@@ -707,7 +768,7 @@ export class ChatTool {
 
 		return [
 			"Ngữ cảnh kiểm duyệt:",
-			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, delete_messages, kick_user, ban_user.",
+			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, delete_messages, kick_user, ban_user, query_guild_moderation, get_moderation_history.",
 			"- Nếu đoạn chat hiện tại có nhiều tin nhắn chửi tục, công kích hoặc xúc phạm người khác thì không được trả lời bằng [skip].",
 			"- Mọi tin nhắn công khai gửi cho người dùng phải viết bằng tiếng Việt.",
 			"- Bậc xử lý đầu tiên: gọi issue_warning cho người vi phạm rồi gửi một cảnh cáo ngắn gọn công khai trong kênh.",
@@ -846,6 +907,34 @@ export class ChatTool {
 			banCount: profile?.banCount || 0,
 			lastAction: profile?.lastAction || null
 		};
+	}
+
+	static async enrichModerationUsers(items = []) {
+		const enriched = [];
+
+		for (const item of items) {
+			let username = null;
+			let displayName = null;
+
+			if (item?.userId) {
+				try {
+					const user = await getUser(item.userId);
+					username = user.username;
+					displayName = user.globalName || user.username;
+				} catch (err) {
+					username = null;
+					displayName = null;
+				}
+			}
+
+			enriched.push({
+				...item,
+				username,
+				displayName
+			});
+		}
+
+		return enriched;
 	}
 
 	static async resolveChannel(channelId, context) {
@@ -1198,6 +1287,24 @@ export class ChatTool {
 			}
 		}
 
+		const logged = recordModerationAction(channel.guild?.id || context?.conversation?.channel?.guild?.id, authorId || null, {
+			action: "delete_messages",
+			reason: this.trimReason(reason),
+			actorId: discord.user?.id || null,
+			channelId: channel.id,
+			messageId: context?.message?.id || null,
+			messageIds: deletedMessageIds,
+			metadata: {
+				mode: ids.length > 0 ? "exact_ids" : "cleanup",
+				authorId: authorId || null,
+				scannedCount: ids.length > 0 ? ids.length : scannedCount,
+				matchedCount: targets.length,
+				deletedCount: deletedMessageIds.length,
+				missingMessageIds,
+				failedMessageIds
+			}
+		});
+
 		return {
 			ok: true,
 			action: "delete_messages",
@@ -1208,6 +1315,7 @@ export class ChatTool {
 			scannedCount: ids.length > 0 ? ids.length : scannedCount,
 			matchedCount: targets.length,
 			deletedCount: deletedMessageIds.length,
+			historyId: logged.action.id,
 			deletedMessageIds,
 			missingMessageIds,
 			failedMessageIds
@@ -1294,6 +1402,38 @@ export class ChatTool {
 			displayName: member?.displayName || null,
 			reason: cleanReason,
 			profile: this.summarizeModerationProfile(recorded.profile)
+		};
+	}
+
+	static async queryGuildModeration({ guildId, actionFilter, limit }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const summary = listGuildModerationProfiles(guild.id, { actionFilter, limit });
+		return {
+			...summary,
+			items: await this.enrichModerationUsers(summary.items)
+		};
+	}
+
+	static async getGuildModerationHistory({ guildId, userId, action, limit }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const history = getModerationHistory(guild.id, { userId, action, limit });
+		return {
+			...history,
+			items: await this.enrichModerationUsers(history.items)
 		};
 	}
 

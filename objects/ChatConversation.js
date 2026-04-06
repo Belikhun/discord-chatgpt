@@ -48,6 +48,7 @@ export class ChatConversation {
 		this.chatActivated = false;
 		this.pendingProcess = false;
 		this.processing = false;
+		this.forceRespondOnNextProcess = false;
 
 		this.instructions += "\n" + lines(
 			"All messages come as structured JSON objects representing Discord messages.",
@@ -91,20 +92,30 @@ export class ChatConversation {
 		this.log.info(`New conversation created in ${this.mode} mode, using model ${this.model}`);
 	}
 
-	buildRuntimeContext(message = this.lastMessage) {
+	buildRuntimeContext(message = this.lastMessage, { forceRespond = false } = {}) {
 		return message
-			? { conversation: this, message }
-			: { conversation: this };
+			? { conversation: this, message, forceRespond }
+			: { conversation: this, forceRespond };
 	}
 
-	async buildResponseRequest(message = this.lastMessage) {
-		const context = this.buildRuntimeContext(message);
+	async buildResponseRequest(message = this.lastMessage, { forceRespond = false } = {}) {
+		const context = this.buildRuntimeContext(message, { forceRespond });
 		const developerMessages = await ChatTool.buildDeveloperMessages(context);
 		let input = this.history.map((item) => {
 			const i = { ...item };
 			delete i.timestamp;
 			return i;
 		});
+
+		if (forceRespond) {
+			developerMessages.unshift({
+				role: "developer",
+				content: [{
+					type: "input_text",
+					text: "Tin nhắn mới nhất đã mention trực tiếp bạn bằng @. Bạn phải trả lời trực tiếp tin nhắn đó và không được trả về [skip]. Hãy trả lời bằng tiếng Việt."
+				}]
+			});
+		}
 
 		if (developerMessages.length > 0)
 			input = developerMessages.concat(input);
@@ -178,11 +189,17 @@ export class ChatConversation {
 			timestamp: Date.now()
 		});
 
+		const wakeupKeywordMatched = any(
+			this.conversationWakeupKeywords,
+			(keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase())
+		);
+		const botMentioned = message.mentions.users.has(discord.user.id);
+
 		const skipThreshold = (this.skipStreak <= 1) ? 1 : 4;
 		const shouldProcess = (this.chatActivated)
 			|| (this.skippedMessages >= skipThreshold)
-			|| message.mentions.users.has(discord.user.id)
-			|| any(this.conversationWakeupKeywords, (keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))
+			|| botMentioned
+			|| wakeupKeywordMatched
 			|| ((message.reference && message.reference.messageId) ? ((await message.channel.messages.fetch(message.reference.messageId)).author.id == discord.user.id) : false);
 
 		if (!shouldProcess) {
@@ -194,6 +211,18 @@ export class ChatConversation {
 
 		this.skippedMessages = 0;
 		this.pendingProcess = true;
+		if (botMentioned || wakeupKeywordMatched) {
+			if (message.channel?.sendTyping) {
+				message.channel.sendTyping().catch((err) => {
+					this.log.warn(`Failed to send typing indicator for mention/wakeup trigger: ${err.message}`);
+				});
+			}
+		}
+
+		if (botMentioned) {
+			this.forceRespondOnNextProcess = true;
+		}
+
 		this.log.info(`Message ${message.id} queued for processing.`);
 		this.scheduleProcess();
 
@@ -249,7 +278,9 @@ export class ChatConversation {
 		this.processing = true;
 		this.pendingProcess = false;
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
-		const request = await this.buildResponseRequest();
+		const forceRespond = this.forceRespondOnNextProcess;
+		this.forceRespondOnNextProcess = false;
+		const request = await this.buildResponseRequest(this.lastMessage, { forceRespond });
 		const options = { tools: request.tools };
 		const reasoning = this.getReasoningOptions();
 		if (reasoning)

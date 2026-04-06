@@ -1,16 +1,17 @@
-import { ChannelType } from "discord.js";
+import { ChannelType, PermissionsBitField } from "discord.js";
 import { discord } from "../clients/discord.js";
 import { getChannel, getGuild, getUser } from "../clients/discord.js";
 import { scope } from "../logger.js";
 import { ALL_EMOJIS } from "../utils.js";
 import { listConversations as listStoredConversations } from "../store/conversation.js";
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
+import { getModerationProfile, recordModerationAction } from "../store/moderation.js";
 import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
 
 export class ChatTool {
 	static log = scope("chat-tool");
 
-	static tools() {
+	static baseTools() {
 		return [
 			{
 				type: "function",
@@ -429,6 +430,10 @@ export class ChatTool {
 		];
 	}
 
+	static async tools(context = {}) {
+		return this.baseTools().concat(await this.getModerationTools(context));
+	}
+
 	static extractToolCalls(output = []) {
 		return output.filter((item) => item?.type === "function_call");
 	}
@@ -458,6 +463,18 @@ export class ChatTool {
 
 		try {
 			switch (name) {
+				case "issue_warning":
+					return this.wrapToolOutput(call_id, await this.issueWarning(args, context));
+
+				case "delete_messages":
+					return this.wrapToolOutput(call_id, await this.deleteMessages(args, context));
+
+				case "kick_user":
+					return this.wrapToolOutput(call_id, await this.kickUser(args, context));
+
+				case "ban_user":
+					return this.wrapToolOutput(call_id, await this.banUser(args, context));
+
 				case "get_user_info":
 					return this.wrapToolOutput(call_id, await this.getUserInfo(args, context));
 
@@ -527,6 +544,307 @@ export class ChatTool {
 			type: "function_call_output",
 			call_id: callId,
 			output: JSON.stringify(payload)
+		};
+	}
+
+	static async getModerationTools(context = {}) {
+		const capabilities = await this.getModerationCapabilities(context);
+		if (!capabilities.fullModerationAccess)
+			return [];
+
+		return [
+			{
+				type: "function",
+				name: "issue_warning",
+				description: "Record a public moderation warning for a guild member before stronger action. Use this before kicking when abusive language, swearing, or attacks continue in chat.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to moderate in. If null, use the current guild."
+						},
+						userId: {
+							type: "string",
+							description: "Discord user ID to warn."
+						},
+						reason: {
+							type: "string",
+							description: "Short, specific moderation reason that can be shown publicly."
+						},
+						evidenceMessageIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional related message IDs used as evidence."
+						}
+					},
+					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "delete_messages",
+				description: "Delete one or more messages in the current guild channel. Supports exact message IDs or cleanup mode using a recent message count with an optional author filter.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						channelId: {
+							type: ["string", "null"],
+							description: "Channel ID to delete messages from. If null, use the current channel."
+						},
+						messageIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Exact message IDs to delete. Leave null when using cleanup mode."
+						},
+						recentCount: {
+							type: ["number", "null"],
+							description: "Number of recent messages to delete in cleanup mode (1-100). Leave null when using exact message IDs."
+						},
+						authorId: {
+							type: ["string", "null"],
+							description: "Optional author ID filter for cleanup mode."
+						},
+						reason: {
+							type: ["string", "null"],
+							description: "Optional moderation reason for the cleanup."
+						}
+					},
+					required: ["channelId", "messageIds", "recentCount", "authorId", "reason"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "kick_user",
+				description: "Kick a guild member for continued abusive behavior after warning.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to moderate in. If null, use the current guild."
+						},
+						userId: {
+							type: "string",
+							description: "Discord user ID to kick."
+						},
+						reason: {
+							type: "string",
+							description: "Clear moderation reason for the kick."
+						},
+						evidenceMessageIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional related message IDs used as evidence."
+						}
+					},
+					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "ban_user",
+				description: "Permanently ban a guild member who returned and continued abusive behavior after a prior kick.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to moderate in. If null, use the current guild."
+						},
+						userId: {
+							type: "string",
+							description: "Discord user ID to ban."
+						},
+						reason: {
+							type: "string",
+							description: "Clear moderation reason for the permanent ban."
+						},
+						evidenceMessageIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional related message IDs used as evidence."
+						}
+					},
+					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
+					additionalProperties: false
+				}
+			}
+		];
+	}
+
+	static async buildDeveloperMessages(context = {}) {
+		const moderationText = await this.buildModerationDeveloperPrompt(context);
+		if (!moderationText)
+			return [];
+
+		return [{
+			role: "developer",
+			content: [{ type: "input_text", text: moderationText }]
+		}];
+	}
+
+	static async buildModerationDeveloperPrompt(context = {}) {
+		const message = context?.message || null;
+		if (!message?.guild || !message?.author)
+			return null;
+
+		const capabilities = await this.getModerationCapabilities(context);
+		if (!capabilities.fullModerationAccess)
+			return null;
+
+		const profile = getModerationProfile(message.guild.id, message.author.id);
+		const lastAction = profile.lastAction
+			? `${this.describeModerationAction(profile.lastAction.action)} lúc ${new Date(profile.lastAction.createdAt).toISOString()}${profile.lastAction.reason ? ` (${profile.lastAction.reason})` : ""}`
+			: "chưa có";
+
+		return [
+			"Ngữ cảnh kiểm duyệt:",
+			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, delete_messages, kick_user, ban_user.",
+			"- Nếu đoạn chat hiện tại có nhiều tin nhắn chửi tục, công kích hoặc xúc phạm người khác thì không được trả lời bằng [skip].",
+			"- Mọi tin nhắn công khai gửi cho người dùng phải viết bằng tiếng Việt.",
+			"- Bậc xử lý đầu tiên: gọi issue_warning cho người vi phạm rồi gửi một cảnh cáo ngắn gọn công khai trong kênh.",
+			"- Nếu người đó đã có cảnh cáo và vẫn tiếp tục hành vi xấu, hãy dùng delete_messages khi cần rồi gọi kick_user với lý do rõ ràng bằng tiếng Việt.",
+			"- Nếu người đó đã từng bị kick, quay lại và vẫn tiếp tục hành vi cũ, hãy gọi ban_user vĩnh viễn với lý do rõ ràng bằng tiếng Việt.",
+			"- Dùng delete_messages để dọn tin nhắn vi phạm. Công cụ này hỗ trợ cả danh sách message ID cụ thể lẫn chế độ dọn gần đây theo số lượng và bộ lọc tác giả.",
+			"- Chỉ kiểm duyệt khi ngữ cảnh chat cho thấy lý do cụ thể. Giữ các tin nhắn kiểm duyệt công khai ngắn gọn, rõ ràng và bằng tiếng Việt.",
+			`- Người đang nói: <@${message.author.id}>`,
+			`- Hồ sơ kiểm duyệt hiện tại: cảnh cáo=${profile.warningCount}, kick=${profile.kickCount}, ban=${profile.banCount}, hành động gần nhất=${lastAction}`
+		].join("\n");
+	}
+
+	static async getModerationCapabilities(context = {}) {
+		if (context.moderationCapabilities)
+			return context.moderationCapabilities;
+
+		const channel = context?.message?.channel || context?.conversation?.channel || null;
+		const guild = context?.message?.guild || context?.conversation?.channel?.guild || null;
+		const unavailable = {
+			available: false,
+			fullModerationAccess: false,
+			guildId: guild?.id || null,
+			channelId: channel?.id || null,
+			canSend: false,
+			canDeleteMessages: false,
+			canKickMembers: false,
+			canBanMembers: false,
+			missingPermissions: ["guild_context"],
+			reason: "Guild text channel context is required."
+		};
+
+		if (!guild || !channel?.isTextBased?.()) {
+			context.moderationCapabilities = unavailable;
+			return unavailable;
+		}
+
+		let botMember = guild.members.me;
+		if (!botMember) {
+			try {
+				botMember = await guild.members.fetchMe();
+			} catch (err) {
+				botMember = null;
+			}
+		}
+
+		const channelPermissions = channel.permissionsFor(botMember || discord.user);
+		const canSend = Boolean(channelPermissions?.has(PermissionsBitField.Flags.SendMessages));
+		const canDeleteMessages = Boolean(channelPermissions?.has(PermissionsBitField.Flags.ManageMessages));
+		const canKickMembers = Boolean(botMember?.permissions.has(PermissionsBitField.Flags.KickMembers));
+		const canBanMembers = Boolean(botMember?.permissions.has(PermissionsBitField.Flags.BanMembers));
+		const missingPermissions = [];
+
+		if (!canSend)
+			missingPermissions.push("SendMessages");
+		if (!canDeleteMessages)
+			missingPermissions.push("ManageMessages");
+		if (!canKickMembers)
+			missingPermissions.push("KickMembers");
+		if (!canBanMembers)
+			missingPermissions.push("BanMembers");
+
+		const capabilities = {
+			available: true,
+			fullModerationAccess: missingPermissions.length === 0,
+			guildId: guild.id,
+			channelId: channel.id,
+			canSend,
+			canDeleteMessages,
+			canKickMembers,
+			canBanMembers,
+			missingPermissions,
+			reason: missingPermissions.length === 0
+				? null
+				: `Missing permissions: ${missingPermissions.join(", ")}`,
+			botMember
+		};
+
+		context.moderationCapabilities = capabilities;
+		return capabilities;
+	}
+
+	static async requireFullModerationAccess(context = {}) {
+		const capabilities = await this.getModerationCapabilities(context);
+		if (capabilities.fullModerationAccess)
+			return { ok: true, capabilities };
+
+		return {
+			ok: false,
+			error: capabilities.reason || "Các công cụ kiểm duyệt không khả dụng trong ngữ cảnh hiện tại."
+		};
+	}
+
+	static describeModerationAction(action) {
+		switch (action) {
+			case "warning":
+				return "cảnh cáo";
+
+			case "kick":
+				return "kick";
+
+			case "ban":
+				return "ban";
+
+			default:
+				return action || "không rõ";
+		}
+	}
+
+	static async resolveGuildMember(guild, userId) {
+		if (!guild || !userId)
+			return null;
+
+		try {
+			return await guild.members.fetch(userId);
+		} catch (err) {
+			return null;
+		}
+	}
+
+	static normalizeEvidenceMessageIds(evidenceMessageIds) {
+		if (!Array.isArray(evidenceMessageIds))
+			return [];
+
+		return [...new Set(evidenceMessageIds.filter(Boolean).map((item) => String(item)))].slice(0, 50);
+	}
+
+	static trimReason(reason, fallback = null) {
+		const trimmed = (reason || "").trim();
+		return trimmed || fallback;
+	}
+
+	static summarizeModerationProfile(profile) {
+		return {
+			warningCount: profile?.warningCount || 0,
+			kickCount: profile?.kickCount || 0,
+			banCount: profile?.banCount || 0,
+			lastAction: profile?.lastAction || null
 		};
 	}
 
@@ -741,6 +1059,244 @@ export class ChatTool {
 		return createMemoryForGuild(guild, { content, ttlSeconds, context });
 	}
 
+	static async issueWarning({ guildId, userId, reason, evidenceMessageIds }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const member = await this.resolveGuildMember(guild, userId);
+		if (!member)
+			return { ok: false, error: "Không tìm thấy thành viên mục tiêu trong máy chủ." };
+
+		const cleanReason = this.trimReason(reason);
+		if (!cleanReason)
+			return { ok: false, error: "Cần cung cấp lý do cảnh cáo." };
+
+		const recorded = recordModerationAction(guild.id, member.id, {
+			action: "warning",
+			reason: cleanReason,
+			actorId: discord.user?.id || null,
+			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
+			messageId: context?.message?.id || null,
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+		});
+
+		return {
+			ok: true,
+			action: "warning",
+			guildId: guild.id,
+			userId: member.id,
+			displayName: member.displayName,
+			reason: cleanReason,
+			profile: this.summarizeModerationProfile(recorded.profile)
+		};
+	}
+
+	static async deleteMessages({ channelId, messageIds, recentCount, authorId, reason }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const channel = await this.resolveChannel(channelId, context);
+		if (!channel?.isTextBased())
+			return { ok: false, error: "Không tìm thấy kênh mục tiêu hoặc kênh đó không phải kênh văn bản." };
+
+		const ids = Array.isArray(messageIds) ? [...new Set(messageIds.filter(Boolean))] : [];
+		const hasCleanupMode = Number.isFinite(recentCount) && recentCount > 0;
+		if (ids.length === 0 && !hasCleanupMode)
+			return { ok: false, error: "Hãy cung cấp danh sách messageIds cụ thể hoặc recentCount để dọn kênh." };
+
+		if (ids.length > 0 && hasCleanupMode)
+			return { ok: false, error: "Chỉ được dùng một trong hai chế độ: messageIds cụ thể hoặc recentCount để dọn kênh." };
+
+		let targets = [];
+		const missingMessageIds = [];
+		let scannedCount = 0;
+
+		if (ids.length > 0) {
+			const fetches = await Promise.allSettled(ids.slice(0, 100).map((id) => channel.messages.fetch(id)));
+			for (let index = 0; index < fetches.length; index += 1) {
+				const result = fetches[index];
+				if (result.status === "fulfilled") {
+					targets.push(result.value);
+					continue;
+				}
+
+				missingMessageIds.push(ids[index]);
+			}
+		} else {
+			const requestedCount = Math.max(1, Math.min(100, Math.floor(recentCount)));
+			const scanBudget = Math.max(requestedCount, Math.min(500, requestedCount * (authorId ? 10 : 3)));
+			let before = null;
+
+			while (scannedCount < scanBudget && targets.length < requestedCount) {
+				const batch = await channel.messages.fetch({
+					limit: Math.min(100, scanBudget - scannedCount),
+					...(before ? { before } : {})
+				});
+
+				if (batch.size === 0)
+					break;
+
+				for (const message of batch.values()) {
+					scannedCount += 1;
+					if (authorId && message.author.id !== authorId)
+						continue;
+
+					targets.push(message);
+					if (targets.length >= requestedCount)
+						break;
+					if (scannedCount >= scanBudget)
+						break;
+				}
+
+				before = batch.last()?.id;
+				if (!before)
+					break;
+			}
+		}
+
+		const cutoff = Date.now() - (14 * 24 * 60 * 60 * 1000);
+		const recentMessages = targets.filter((message) => message.createdTimestamp >= cutoff);
+		const oldMessages = targets.filter((message) => message.createdTimestamp < cutoff);
+		const deletedMessageIds = [];
+		const failedMessageIds = [];
+
+		if (recentMessages.length === 1) {
+			try {
+				await recentMessages[0].delete();
+				deletedMessageIds.push(recentMessages[0].id);
+			} catch (err) {
+				failedMessageIds.push(recentMessages[0].id);
+			}
+		} else if (recentMessages.length > 1) {
+			try {
+				const deleted = await channel.bulkDelete(recentMessages, true);
+				deletedMessageIds.push(...deleted.keys());
+			} catch (err) {
+				for (const message of recentMessages) {
+					try {
+						await message.delete();
+						deletedMessageIds.push(message.id);
+					} catch (deleteErr) {
+						failedMessageIds.push(message.id);
+					}
+				}
+			}
+		}
+
+		for (const message of oldMessages) {
+			try {
+				await message.delete();
+				deletedMessageIds.push(message.id);
+			} catch (err) {
+				failedMessageIds.push(message.id);
+			}
+		}
+
+		return {
+			ok: true,
+			action: "delete_messages",
+			channelId: channel.id,
+			reason: this.trimReason(reason),
+			mode: ids.length > 0 ? "exact_ids" : "cleanup",
+			authorId: authorId || null,
+			scannedCount: ids.length > 0 ? ids.length : scannedCount,
+			matchedCount: targets.length,
+			deletedCount: deletedMessageIds.length,
+			deletedMessageIds,
+			missingMessageIds,
+			failedMessageIds
+		};
+	}
+
+	static async kickUser({ guildId, userId, reason, evidenceMessageIds }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const member = await this.resolveGuildMember(guild, userId);
+		if (!member)
+			return { ok: false, error: "Không tìm thấy thành viên mục tiêu trong máy chủ." };
+
+		const cleanReason = this.trimReason(reason);
+		if (!cleanReason)
+			return { ok: false, error: "Cần cung cấp lý do kick." };
+
+		if (!member.kickable)
+			return { ok: false, error: "Bot không thể kick thành viên này do thứ bậc role hoặc thiếu quyền." };
+
+		await member.kick(cleanReason);
+		const recorded = recordModerationAction(guild.id, member.id, {
+			action: "kick",
+			reason: cleanReason,
+			actorId: discord.user?.id || null,
+			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
+			messageId: context?.message?.id || null,
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+		});
+
+		return {
+			ok: true,
+			action: "kick",
+			guildId: guild.id,
+			userId: member.id,
+			displayName: member.displayName,
+			reason: cleanReason,
+			profile: this.summarizeModerationProfile(recorded.profile)
+		};
+	}
+
+	static async banUser({ guildId, userId, reason, evidenceMessageIds }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const cleanReason = this.trimReason(reason);
+		if (!cleanReason)
+			return { ok: false, error: "Cần cung cấp lý do ban." };
+
+		const member = await this.resolveGuildMember(guild, userId);
+		if (member && !member.bannable)
+			return { ok: false, error: "Bot không thể ban thành viên này do thứ bậc role hoặc thiếu quyền." };
+
+		await guild.members.ban(userId, {
+			deleteMessageSeconds: 0,
+			reason: cleanReason
+		});
+
+		const recorded = recordModerationAction(guild.id, userId, {
+			action: "ban",
+			reason: cleanReason,
+			actorId: discord.user?.id || null,
+			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
+			messageId: context?.message?.id || null,
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+		});
+
+		return {
+			ok: true,
+			action: "ban",
+			guildId: guild.id,
+			userId,
+			displayName: member?.displayName || null,
+			reason: cleanReason,
+			profile: this.summarizeModerationProfile(recorded.profile)
+		};
+	}
+
 	static extractConversationTexts(item) {
 		const texts = [];
 		if (!item)
@@ -764,7 +1320,7 @@ export class ChatTool {
 	static async listConversations({ guildId, includeCurrent, limit }, context) {
 		const guild = await this.resolveGuild(guildId, context);
 		if (guildId && !guild) {
-			return { ok: false, error: "Guild not found or not available in this context." };
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
 		}
 
 		const currentChannelId = context?.conversation?.channel?.id || null;

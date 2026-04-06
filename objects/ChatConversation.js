@@ -27,6 +27,7 @@ export class ChatConversation {
 		this.model = model;
 		this.mode = mode;
 		this.nickname = nickname;
+		this.lastMessage = null;
 
 		// Resolve the bot's display name for this guild (nickname if set, otherwise username).
 		const botName = (channel.guild)
@@ -88,6 +89,31 @@ export class ChatConversation {
 		this.log.info(`New conversation created in ${this.mode} mode, using model ${this.model}`);
 	}
 
+	buildRuntimeContext(message = this.lastMessage) {
+		return message
+			? { conversation: this, message }
+			: { conversation: this };
+	}
+
+	async buildResponseRequest(message = this.lastMessage) {
+		const context = this.buildRuntimeContext(message);
+		const developerMessages = await ChatTool.buildDeveloperMessages(context);
+		let input = this.history.map((item) => {
+			const i = { ...item };
+			delete i.timestamp;
+			return i;
+		});
+
+		if (developerMessages.length > 0)
+			input = developerMessages.concat(input);
+
+		return {
+			context,
+			input,
+			tools: await ChatTool.tools(context)
+		};
+	}
+
 	purgeExpiredHistory() {
 		this.history = this.history.filter(({ timestamp }) => ((Date.now() - timestamp) < 86400000));
 	}
@@ -131,6 +157,8 @@ export class ChatConversation {
 		// Empty message, we prob don't want to process this.
 		if (content.length == 0)
 			return this;
+
+		this.lastMessage = message;
 
 		this.history.push({
 			role: "user",
@@ -178,6 +206,7 @@ export class ChatConversation {
 
 	async handleStructuredPrompt(payload, { activateChat = true, role = "user" } = {}) {
 		this.purgeExpiredHistory();
+		this.lastMessage = null;
 
 		const text = (typeof payload === "string")
 			? payload
@@ -208,13 +237,10 @@ export class ChatConversation {
 		this.processing = true;
 		this.pendingProcess = false;
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
-		const options = { tools: ChatTool.tools() };
-
-		let input = this.history.map((item) => {
-			const i = { ...item };
-			delete i.timestamp;
-			return i;
-		});
+		const request = await this.buildResponseRequest();
+		const options = { tools: request.tools };
+		const context = request.context;
+		let input = request.input;
 
 		let response = null;
 		let output = [];
@@ -242,7 +268,7 @@ export class ChatConversation {
 				break;
 			}
 
-			const toolOutputs = await ChatTool.runToolCalls(toolCalls, { conversation: this });
+			const toolOutputs = await ChatTool.runToolCalls(toolCalls, context);
 			this.history.push(...toolOutputs.map((item) => ({
 				...item,
 				timestamp: Date.now()

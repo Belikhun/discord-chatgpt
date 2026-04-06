@@ -198,6 +198,10 @@ export class ChatCompletion {
 			content,
 			timestamp: Date.now()
 		});
+		this.conversation.lastMessage = this.originalMessage;
+
+		const request = await this.conversation.buildResponseRequest(this.originalMessage);
+		const runtimeContext = request.context;
 
 		const options = { tools: [] };
 
@@ -214,12 +218,8 @@ export class ChatCompletion {
 		if (supportImageGeneration.includes(this.model))
 			options.tools.push({ type: "image_generation" });
 
-		options.tools.push(...ChatTool.tools());
-		let input = this.conversation.history.map((item) => {
-			const i = { ...item };
-			delete i.timestamp;
-			return i;
-		});
+		options.tools.push(...request.tools);
+		let input = request.input;
 
 		let pass = 0;
 		const maxPasses = 10;
@@ -255,8 +255,7 @@ export class ChatCompletion {
 			this.log.info(`Processing ${toolCalls.length} tool call(s).`);
 
 			const toolOutputs = await ChatTool.runToolCalls(toolCalls, {
-				conversation: this.conversation,
-				message: this.originalMessage
+				...runtimeContext
 			});
 
 			this.markToolResults(toolCalls, toolOutputs);

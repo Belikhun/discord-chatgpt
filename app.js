@@ -70,6 +70,21 @@ function buildCommands() {
 			}),
 
 		new SlashCommandBuilder()
+			.setName("reasoning")
+			.setDescription("Đặt mức độ suy luận cho model ở kênh hiện tại")
+			.addStringOption((option) => {
+				return option.setName("effort")
+					.setDescription("Mức độ suy luận sẽ dùng cho các model hỗ trợ reasoning")
+					.setRequired(true)
+					.addChoices(
+						{ name: "Tối thiểu", value: "minimal" },
+						{ name: "Thấp", value: "low" },
+						{ name: "Trung bình", value: "medium" },
+						{ name: "Cao", value: "high" }
+					);
+			}),
+
+		new SlashCommandBuilder()
 			.setName("nickname")
 			.setDescription("Đặt nickname cho bot trong máy chủ hiện tại")
 			.addStringOption((option) => {
@@ -212,6 +227,7 @@ function resolveConversation(channel, { modeOverride } = {}) {
 
 	const model = config.get(`model.${channel.id}`, MODEL_DEFAULT);
 	const mode = modeOverride ?? config.get(`mode.${channel.id}`, (channel instanceof DMChannel) ? "assistant" : "chat");
+	const reasoningEffort = config.get(`reasoning.${channel.id}`, "medium") || "medium";
 
 	let instructions;
 
@@ -235,7 +251,8 @@ function resolveConversation(channel, { modeOverride } = {}) {
 
 	const nicknames = config.get("nicknames", {});
 	const conversation = new ChatConversation(channel, model, instructions, mode, {
-		nickname: nicknames[channel.guild?.id] || NICKNAME_DEFAULT
+		nickname: nicknames[channel.guild?.id] || NICKNAME_DEFAULT,
+		reasoningEffort
 	});
 
 	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
@@ -380,6 +397,27 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 
 				await interaction.reply({
 					content: `${emoji("acinfo")} Chế độ phản hồi cho kênh hiện tại được đặt thành ${code(mode)}!`
+				});
+
+				break;
+			}
+
+			case "reasoning": {
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				const effort = interaction.options.getString("effort", true);
+				setConversation(interaction.channelId, null);
+				config.set(`reasoning.${interaction.channelId}`, effort);
+
+				await interaction.reply({
+					content: `${emoji("acinfo")} Mức độ suy luận cho kênh hiện tại đã được đặt thành ${code(effort)}. Thiết lập này sẽ được dùng khi kênh sử dụng model hỗ trợ reasoning.`
 				});
 
 				break;

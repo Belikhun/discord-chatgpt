@@ -74,6 +74,15 @@ export class ChatCompletion {
 		/** @type {Map<string, "calling" | "success" | "error">} */
 		this.toolCallStatus = new Map();
 
+		/** @type {{ type: "reasoning" | "assistant" | "tool", title: string, detail: string, text: string, status: "thinking" | "calling" | "success" | "error" }[]} */
+		this.timelineEntries = [];
+
+		/** @type {Map<string, number>} */
+		this.toolTimelineIndex = new Map();
+
+		/** @type {?number} */
+		this.reasoningTimelineIndex = null;
+
 		/** @type {MediaGalleryBuilder} */
 		this.gallery = null;
 
@@ -82,6 +91,119 @@ export class ChatCompletion {
 
 	get runtime() {
 		return (performance.now() - this.startTime) / 1000;
+	}
+
+	getReasoningPreview() {
+		if (this.reasoning.length === 0)
+			return "";
+
+		const words = this.reasoning.split(" ");
+		if (words.length > 80)
+			return "..." + words.slice(-80).join(" ");
+
+		return words.join(" ");
+	}
+
+	getToolStatusLines() {
+		const lines = [];
+
+		if (this.toolCallsUsed.size === 0)
+			return lines;
+
+		for (const toolName of this.toolCallsUsed) {
+			const status = this.toolCallStatus.get(toolName) || "calling";
+			const statusEmoji = (status === "success")
+				? emoji("acok")
+				: ((status === "error")
+					? emoji("acerror")
+					: emoji("ganyuroll", true));
+			lines.push(`-# > ${statusEmoji}  **${toolName}**`);
+		}
+
+		return lines;
+	}
+
+	pushTimelineEntry({ type, title = "", detail = "", text = "", status = "thinking" }) {
+		this.timelineEntries.push({ type, title, detail, text, status });
+		return this.timelineEntries.length - 1;
+	}
+
+	updateTimelineEntry(index, { detail, text, status } = {}) {
+		const entry = this.timelineEntries[index];
+		if (!entry)
+			return;
+
+		if (typeof detail === "string")
+			entry.detail = detail;
+
+		if (typeof text === "string")
+			entry.text = text;
+
+		if (status)
+			entry.status = status;
+	}
+
+	ensureReasoningTimelineEntry() {
+		if (this.reasoningTimelineIndex === null) {
+			this.reasoningTimelineIndex = this.pushTimelineEntry({
+				type: "reasoning",
+				title: "Suy luận",
+				detail: "Đang phân tích yêu cầu...",
+				status: "thinking"
+			});
+		}
+
+		return this.reasoningTimelineIndex;
+	}
+
+	commitAssistantBuffer() {
+		const content = this.responseBuffer.trim();
+		if (!content)
+			return;
+
+		this.pushTimelineEntry({
+			type: "assistant",
+			text: content,
+			status: "success"
+		});
+
+		this.responseBuffer = "";
+		this.isInCode = false;
+		this.isInCodeblock = false;
+		this.codeblockHeader = null;
+	}
+
+	buildStreamingMessageContent(content = "") {
+		const sections = [];
+		const trimmedContent = (content || "").trim();
+
+		for (const entry of this.timelineEntries) {
+			if (entry.type === "reasoning")
+				continue;
+
+			if (entry.type === "assistant") {
+				if (entry.text)
+					sections.push(entry.text);
+				continue;
+			}
+
+			if (entry.type === "tool") {
+				const statusEmoji = (entry.status === "success")
+					? emoji("acok")
+					: ((entry.status === "error")
+						? emoji("acerror")
+						: emoji("ganyuroll", true));
+				const lines = [`- ${statusEmoji} **${entry.title}**`];
+				if (entry.detail)
+					lines.push(`-# ${entry.detail}`);
+				sections.push(lines.join("\n"));
+			}
+		}
+
+		if (trimmedContent.length > 0)
+			sections.push(trimmedContent);
+
+		return sections.join("\n\n").trim();
 	}
 
 	thinkingMessage() {
@@ -97,31 +219,11 @@ export class ChatCompletion {
 			`## ${emoji("loading", true)} ${bold(thinking)}`
 		];
 
-		if (this.reasoning.length > 0) {
-			const words = this.reasoning.split(" ");
-			let thought = "";
+		const reasoningPreview = this.getReasoningPreview();
+		if (reasoningPreview.length > 0)
+			lines.push(sh(`> ${reasoningPreview}`));
 
-			if (words.length > 80) {
-				thought = "..." + words.slice(-80)
-					.join(" ");
-			} else {
-				thought = words.join(" ");
-			}
-
-			lines.push(sh(`> ${thought}`));
-		}
-
-		if (this.toolCallsUsed.size > 0) {
-			for (const toolName of this.toolCallsUsed) {
-				const status = this.toolCallStatus.get(toolName) || "calling";
-				const statusEmoji = (status === "success")
-					? emoji("acok")
-					: ((status === "error")
-						? emoji("acerror")
-						: emoji("ganyuroll", true));
-				lines.push(`-# > ${statusEmoji}  **${toolName}**`);
-			}
-		}
+		lines.push(...this.getToolStatusLines());
 
 		return this.thinkingMessageComponent.setContent(lines.join("\n"));
 	}
@@ -205,12 +307,9 @@ export class ChatCompletion {
 
 		const options = { tools: [] };
 
-		if (this.isReasoningModel()) {
-			options.reasoning = {
-				effort: "low",
-				summary: "auto"
-			};
-		}
+		const reasoning = this.conversation.getReasoningOptions();
+		if (reasoning)
+			options.reasoning = reasoning;
 
 		if (supportSearch.includes(this.model))
 			options.tools.push({ type: "web_search_preview" });
@@ -222,7 +321,7 @@ export class ChatCompletion {
 		let input = request.input;
 
 		let pass = 0;
-		const maxPasses = 10;
+		const maxPasses = 20;
 		let finalResponse = null;
 		let toolCalls = [];
 
@@ -312,6 +411,8 @@ export class ChatCompletion {
 				}
 
 				case "response.reasoning_summary_part.added": {
+					this.ensureReasoningTimelineEntry();
+
 					if (this.reasoning.length > 0)
 						this.handleReasoning(" ");
 
@@ -394,6 +495,13 @@ export class ChatCompletion {
 				}
 
 				case "response.completed": {
+					if (this.reasoningTimelineIndex !== null) {
+						this.updateTimelineEntry(this.reasoningTimelineIndex, {
+							detail: this.getReasoningPreview() || "Đã hoàn tất suy luận.",
+							status: "success"
+						});
+					}
+
 					finalResponse = event.response;
 					break;
 				}
@@ -415,8 +523,17 @@ export class ChatCompletion {
 			return;
 
 		if (!this.toolCallsUsed.has(toolName)) {
+			if (this.inResponse)
+				this.commitAssistantBuffer();
+
 			this.toolCallsUsed.add(toolName);
 			this.toolCallStatus.set(toolName, "calling");
+			this.toolTimelineIndex.set(toolName, this.pushTimelineEntry({
+				type: "tool",
+				title: `Gọi công cụ ${toolName}`,
+				detail: "Đang chờ kết quả...",
+				status: "calling"
+			}));
 			this.deferUpdate();
 		}
 	}
@@ -447,6 +564,13 @@ export class ChatCompletion {
 
 			if (toolName) {
 				this.toolCallStatus.set(toolName, ok ? "success" : "error");
+				const timelineIndex = this.toolTimelineIndex.get(toolName);
+				if (typeof timelineIndex === "number") {
+					this.updateTimelineEntry(timelineIndex, {
+						detail: ok ? "Thực thi thành công." : "Thực thi thất bại hoặc trả về lỗi.",
+						status: ok ? "success" : "error"
+					});
+				}
 			}
 		}
 
@@ -469,6 +593,10 @@ export class ChatCompletion {
 			.replaceAll("\n", " ");
 
 		this.reasoning += delta;
+		this.updateTimelineEntry(this.ensureReasoningTimelineEntry(), {
+			detail: this.getReasoningPreview(),
+			status: "thinking"
+		});
 		this.deferUpdate();
 	}
 
@@ -692,7 +820,7 @@ export class ChatCompletion {
 				const processed = this.conversation?.processOutputEmojis
 					? this.conversation.processOutputEmojis(this.responses[this.responseIndex])
 					: this.responses[this.responseIndex];
-				textContent.setContent(processed);
+				textContent.setContent(processed || "*Đang tạo phản hồi...*");
 			}
 
 			if (this.sendNextMessage) {
@@ -720,7 +848,7 @@ export class ChatCompletion {
 			const processed = this.conversation?.processOutputEmojis
 				? this.conversation.processOutputEmojis(content)
 				: content;
-			textContent.setContent(processed);
+			textContent.setContent(this.buildStreamingMessageContent(processed) || "*Đang tạo phản hồi...*");
 			const footer = new TextDisplayBuilder().setContent(this.footer());
 			components.push(footer);
 

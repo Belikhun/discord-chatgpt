@@ -21,12 +21,14 @@ export class ChatConversation {
 	 * @param	{"chat" | "assistant"}								mode
 	 */
 	constructor(channel, model, instructions, mode, {
-		nickname = "ChatGPT"
+		nickname = "ChatGPT",
+		reasoningEffort = "medium"
 	} = {}) {
 		this.channel = channel;
 		this.model = model;
 		this.mode = mode;
 		this.nickname = nickname;
+		this.reasoningEffort = reasoningEffort;
 		this.lastMessage = null;
 
 		// Resolve the bot's display name for this guild (nickname if set, otherwise username).
@@ -120,6 +122,16 @@ export class ChatConversation {
 
 	isReasoningModel() {
 		return (/^o\d/.test(this.model) || /^gpt-5(\.|$)/.test(this.model));
+	}
+
+	getReasoningOptions() {
+		if (!this.isReasoningModel())
+			return null;
+
+		return {
+			effort: this.reasoningEffort || "medium",
+			summary: "auto"
+		};
 	}
 
 	/**
@@ -239,6 +251,9 @@ export class ChatConversation {
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
 		const request = await this.buildResponseRequest();
 		const options = { tools: request.tools };
+		const reasoning = this.getReasoningOptions();
+		if (reasoning)
+			options.reasoning = reasoning;
 		const context = request.context;
 		let input = request.input;
 

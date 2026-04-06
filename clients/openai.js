@@ -6,6 +6,10 @@ const { OPENAI_API_KEY } = env;
 export const openAI = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 export const models = [
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.4-nano",
+	"gpt-5.2-pro",
 	"gpt-5.2",
 	"gpt-5.1",
 	"gpt-5",
@@ -30,6 +34,7 @@ export const models = [
 ];
 
 export const supportSearch = [
+	"gpt-5.4",
 	"gpt-5.2",
 	"gpt-5.1",
 	"gpt-5",
@@ -41,6 +46,7 @@ export const supportSearch = [
 ];
 
 export const supportImageGeneration = [
+	"gpt-5.4",
 	"gpt-5.2",
 	"gpt-5.1",
 	"gpt-5",

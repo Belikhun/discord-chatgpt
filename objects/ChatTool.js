@@ -1,15 +1,26 @@
-import { ChannelType, PermissionsBitField } from "discord.js";
+import { ChannelType, MessageFlags, PermissionsBitField } from "discord.js";
 import { discord } from "../clients/discord.js";
 import { getChannel, getGuild, getUser } from "../clients/discord.js";
 import { scope } from "../logger.js";
 import { ALL_EMOJIS } from "../utils.js";
 import { listConversations as listStoredConversations } from "../store/conversation.js";
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
-import { getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory } from "../store/moderation.js";
+import { getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory, WARNING_EXPIRATION_MS, WARNING_THRESHOLD_FOR_KICK } from "../store/moderation.js";
 import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
 
 export class ChatTool {
 	static log = scope("chat-tool");
+	static componentTypes = {
+		Container: 17,
+		Separator: 14,
+		TextDisplay: 10
+	};
+
+	static moderationColors = {
+		warning: 0xF59E0B,
+		kick: 0xF97316,
+		ban: 0xDC2626
+	};
 
 	static baseTools() {
 		return [
@@ -562,7 +573,7 @@ export class ChatTool {
 			{
 				type: "function",
 				name: "issue_warning",
-				description: "Record a public moderation warning for a guild member before stronger action. Use this before kicking when abusive language, swearing, or attacks continue in chat.",
+				description: "Record a public moderation warning for a guild member before stronger action. Warnings expire after 24 hours and should be used before kicking when abusive language, swearing, or attacks continue in chat.",
 				strict: true,
 				parameters: {
 					type: "object",
@@ -626,7 +637,7 @@ export class ChatTool {
 			{
 				type: "function",
 				name: "kick_user",
-				description: "Kick a guild member for continued abusive behavior after warning.",
+				description: "Kick a guild member for continued abusive behavior only after they have 3 active warnings within the last 24 hours. This tool attempts to DM the member before kicking.",
 				strict: true,
 				parameters: {
 					type: "object",
@@ -656,7 +667,7 @@ export class ChatTool {
 			{
 				type: "function",
 				name: "ban_user",
-				description: "Permanently ban a guild member who returned and continued abusive behavior after a prior kick.",
+				description: "Permanently ban a guild member who returned and continued abusive behavior after a prior kick. This tool attempts to DM the member before banning.",
 				strict: true,
 				parameters: {
 					type: "object",
@@ -771,13 +782,14 @@ export class ChatTool {
 			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, delete_messages, kick_user, ban_user, query_guild_moderation, get_moderation_history.",
 			"- Nếu đoạn chat hiện tại có nhiều tin nhắn chửi tục, công kích hoặc xúc phạm người khác thì không được trả lời bằng [skip].",
 			"- Mọi tin nhắn công khai gửi cho người dùng phải viết bằng tiếng Việt.",
-			"- Bậc xử lý đầu tiên: gọi issue_warning cho người vi phạm rồi gửi một cảnh cáo ngắn gọn công khai trong kênh.",
-			"- Nếu người đó đã có cảnh cáo và vẫn tiếp tục hành vi xấu, hãy dùng delete_messages khi cần rồi gọi kick_user với lý do rõ ràng bằng tiếng Việt.",
+			`- Bậc xử lý đầu tiên: gọi issue_warning cho người vi phạm rồi gửi một cảnh cáo ngắn gọn công khai trong kênh. Mỗi cảnh cáo chỉ còn hiệu lực trong ${Math.floor(WARNING_EXPIRATION_MS / (60 * 60 * 1000))} giờ.`,
+			`- Chỉ gọi kick_user khi người đó đã có ít nhất ${WARNING_THRESHOLD_FOR_KICK} cảnh cáo còn hiệu lực và vẫn tiếp tục hành vi xấu. Có thể dùng delete_messages trước khi kick nếu cần dọn tin nhắn vi phạm.`,
+			"- Trước khi kick hoặc ban, hãy để công cụ gửi thông báo DM cho người vi phạm với lý do rõ ràng bằng tiếng Việt rồi mới thực hiện hành động.",
 			"- Nếu người đó đã từng bị kick, quay lại và vẫn tiếp tục hành vi cũ, hãy gọi ban_user vĩnh viễn với lý do rõ ràng bằng tiếng Việt.",
 			"- Dùng delete_messages để dọn tin nhắn vi phạm. Công cụ này hỗ trợ cả danh sách message ID cụ thể lẫn chế độ dọn gần đây theo số lượng và bộ lọc tác giả.",
 			"- Chỉ kiểm duyệt khi ngữ cảnh chat cho thấy lý do cụ thể. Giữ các tin nhắn kiểm duyệt công khai ngắn gọn, rõ ràng và bằng tiếng Việt.",
 			`- Người đang nói: <@${message.author.id}>`,
-			`- Hồ sơ kiểm duyệt hiện tại: cảnh cáo=${profile.warningCount}, kick=${profile.kickCount}, ban=${profile.banCount}, hành động gần nhất=${lastAction}`
+			`- Hồ sơ kiểm duyệt hiện tại: cảnh cáo còn hiệu lực=${profile.warningCount}/${WARNING_THRESHOLD_FOR_KICK}, tổng cảnh cáo=${profile.totalWarningCount || 0}, kick=${profile.kickCount}, ban=${profile.banCount}, cảnh cáo gần nhất hết hạn=${profile.lastWarningExpiresAt ? new Date(profile.lastWarningExpiresAt).toISOString() : "không có"}, hành động gần nhất=${lastAction}`
 		].join("\n");
 	}
 
@@ -903,10 +915,199 @@ export class ChatTool {
 	static summarizeModerationProfile(profile) {
 		return {
 			warningCount: profile?.warningCount || 0,
+			activeWarningCount: profile?.activeWarningCount || profile?.warningCount || 0,
+			totalWarningCount: profile?.totalWarningCount || 0,
+			lastWarningExpiresAt: profile?.lastWarningExpiresAt || null,
 			kickCount: profile?.kickCount || 0,
 			banCount: profile?.banCount || 0,
 			lastAction: profile?.lastAction || null
 		};
+	}
+
+	static createTextComponent(content) {
+		return {
+			type: this.componentTypes.TextDisplay,
+			content
+		};
+	}
+
+	static createSeparatorComponent(spacing = 1, divider = true) {
+		return {
+			type: this.componentTypes.Separator,
+			spacing,
+			divider
+		};
+	}
+
+	static createContainerComponent(components, accentColor) {
+		return {
+			type: this.componentTypes.Container,
+			accent_color: accentColor,
+			components
+		};
+	}
+
+	static formatDiscordTimestamp(timestamp, style = "F") {
+		if (!Number.isFinite(timestamp))
+			return "không rõ";
+
+		return `<t:${Math.floor(timestamp / 1000)}:${style}>`;
+	}
+
+	static async sendStyledNotice(target, components, fallbackContent) {
+		if (!target?.send)
+			return { attempted: false, sent: false, error: "Đích gửi tin nhắn không hợp lệ." };
+
+		try {
+			const sentMessage = await target.send({
+				flags: MessageFlags.IsComponentsV2,
+				components
+			});
+
+			return {
+				attempted: true,
+				sent: true,
+				messageId: sentMessage?.id || null
+			};
+		} catch (err) {
+			this.log.warn(`Không thể gửi notice dạng Components V2: ${err.message}`);
+
+			try {
+				const sentMessage = await target.send({
+					content: fallbackContent
+				});
+
+				return {
+					attempted: true,
+					sent: true,
+					messageId: sentMessage?.id || null,
+					fallback: true
+				};
+			} catch (fallbackErr) {
+				return {
+					attempted: true,
+					sent: false,
+					error: fallbackErr.message
+				};
+			}
+		}
+	}
+
+	static async sendWarningNotice({ channel, member, reason, warningExpiresAt, profile }) {
+		if (!channel?.isTextBased?.()) {
+			return {
+				attempted: false,
+				sent: false,
+				error: "Không có kênh văn bản phù hợp để gửi cảnh cáo công khai."
+			};
+		}
+
+		const expiresAtFull = this.formatDiscordTimestamp(warningExpiresAt, "F");
+		const expiresAtRelative = this.formatDiscordTimestamp(warningExpiresAt, "R");
+		const activeWarnings = profile?.warningCount || 0;
+		const warningCard = this.createContainerComponent([
+			this.createTextComponent("## ⚠️ Cảnh Cáo Kiểm Duyệt"),
+			this.createTextComponent([
+				`<@${member.id}>, đây là **cảnh cáo chính thức** từ hệ thống kiểm duyệt của máy chủ.`,
+				"",
+				`**Lý do vi phạm**`,
+				reason
+			].join("\n")),
+			this.createSeparatorComponent(1, true),
+			this.createTextComponent([
+				`**Hiệu lực đến:** ${expiresAtFull}`,
+				`**Còn lại:** ${expiresAtRelative}`,
+				`**Cảnh cáo đang còn hiệu lực:** **${activeWarnings}/${WARNING_THRESHOLD_FOR_KICK}**`
+			].join("\n")),
+			this.createSeparatorComponent(2, false),
+			this.createTextComponent(
+				"> Vui lòng dừng ngay hành vi vi phạm. Nếu tiếp tục tái phạm trong thời gian cảnh cáo còn hiệu lực, bạn có thể bị kick khỏi máy chủ."
+			)
+		], this.moderationColors.warning);
+		const fallbackContent = [
+			"⚠️ CẢNH CÁO KIỂM DUYỆT",
+			`${member.displayName || member.user?.username || member.id}: đây là cảnh cáo chính thức.`,
+			`Lý do: ${reason}`,
+			`Hiệu lực đến: ${expiresAtFull} (${expiresAtRelative})`,
+			`Cảnh cáo đang còn hiệu lực: ${activeWarnings}/${WARNING_THRESHOLD_FOR_KICK}`,
+			"Nếu tiếp tục tái phạm trong thời gian cảnh cáo còn hiệu lực, bạn có thể bị kick khỏi máy chủ."
+		].join("\n");
+
+		return this.sendStyledNotice(channel, [warningCard], fallbackContent);
+	}
+
+	static buildModerationDmContent({ action, guild, reason }) {
+		const isBan = action === "ban";
+		const title = isBan ? "## 🔨 Thông Báo Ban Vĩnh Viễn" : "## 👢 Thông Báo Kick";
+		const actionLine = isBan
+			? "Bạn sẽ bị **ban vĩnh viễn** khỏi máy chủ này ngay sau thông báo này."
+			: "Bạn sẽ bị **kick** khỏi máy chủ này ngay sau thông báo này.";
+		const guildName = guild?.name || "Discord";
+
+		return {
+			components: [
+				this.createContainerComponent([
+					this.createTextComponent(title),
+					this.createTextComponent([
+						`**Máy chủ:** ${guildName}`,
+						actionLine
+					].join("\n")),
+					this.createSeparatorComponent(1, true),
+					this.createTextComponent([
+						"**Lý do xử lý**",
+						reason
+					].join("\n")),
+					this.createSeparatorComponent(2, false),
+					this.createTextComponent(
+						"> Nếu bạn cho rằng đây là nhầm lẫn, hãy liên hệ đội ngũ quản trị của máy chủ để được xem xét lại."
+					)
+				], isBan ? this.moderationColors.ban : this.moderationColors.kick)
+			],
+			fallbackContent: [
+				isBan ? "🔨 THÔNG BÁO BAN VĨNH VIỄN" : "👢 THÔNG BÁO KICK",
+				`Máy chủ: ${guildName}`,
+				actionLine.replace(/\*\*/g, ""),
+				`Lý do: ${reason}`,
+				"Nếu bạn cho rằng đây là nhầm lẫn, hãy liên hệ đội ngũ quản trị của máy chủ để được xem xét lại."
+			].join("\n")
+		};
+	}
+
+	static async sendModerationDirectMessage({ member, userId, guild, action, reason }) {
+		let user = member?.user || null;
+
+		if (!user && userId) {
+			try {
+				user = await getUser(userId);
+			} catch (err) {
+				user = null;
+			}
+		}
+
+		if (!user) {
+			return {
+				attempted: false,
+				sent: false,
+				error: "Không thể tải thông tin người dùng để gửi DM trước khi kiểm duyệt."
+			};
+		}
+
+		try {
+			const dmContent = this.buildModerationDmContent({ action, guild, reason });
+			const result = await this.sendStyledNotice(user, dmContent.components, dmContent.fallbackContent);
+			return {
+				...result,
+				userId: user.id
+			};
+		} catch (err) {
+			this.log.warn(`Không thể gửi DM kiểm duyệt tới ${user.id}: ${err.message}`);
+			return {
+				attempted: true,
+				sent: false,
+				userId: user.id,
+				error: err.message
+			};
+		}
 	}
 
 	static async enrichModerationUsers(items = []) {
@@ -1173,6 +1374,13 @@ export class ChatTool {
 			messageId: context?.message?.id || null,
 			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
 		});
+		const publicNotice = await this.sendWarningNotice({
+			channel: context?.message?.channel || context?.conversation?.channel || null,
+			member,
+			reason: cleanReason,
+			warningExpiresAt: recorded.action.metadata?.expiresAt || null,
+			profile: recorded.profile
+		});
 
 		return {
 			ok: true,
@@ -1181,6 +1389,8 @@ export class ChatTool {
 			userId: member.id,
 			displayName: member.displayName,
 			reason: cleanReason,
+			warningExpiresAt: recorded.action.metadata?.expiresAt || null,
+			publicNotice,
 			profile: this.summarizeModerationProfile(recorded.profile)
 		};
 	}
@@ -1339,8 +1549,25 @@ export class ChatTool {
 		if (!cleanReason)
 			return { ok: false, error: "Cần cung cấp lý do kick." };
 
+		const profile = getModerationProfile(guild.id, member.id);
+		if ((profile.warningCount || 0) < WARNING_THRESHOLD_FOR_KICK) {
+			return {
+				ok: false,
+				error: `Chỉ được kick sau khi người dùng có ít nhất ${WARNING_THRESHOLD_FOR_KICK} cảnh cáo còn hiệu lực trong 24 giờ gần nhất.`,
+				profile: this.summarizeModerationProfile(profile)
+			};
+		}
+
 		if (!member.kickable)
 			return { ok: false, error: "Bot không thể kick thành viên này do thứ bậc role hoặc thiếu quyền." };
+
+		const dmNotification = await this.sendModerationDirectMessage({
+			member,
+			userId: member.id,
+			guild,
+			action: "kick",
+			reason: cleanReason
+		});
 
 		await member.kick(cleanReason);
 		const recorded = recordModerationAction(guild.id, member.id, {
@@ -1349,7 +1576,10 @@ export class ChatTool {
 			actorId: discord.user?.id || null,
 			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
 			messageId: context?.message?.id || null,
-			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds),
+			metadata: {
+				dmNotification
+			}
 		});
 
 		return {
@@ -1359,6 +1589,7 @@ export class ChatTool {
 			userId: member.id,
 			displayName: member.displayName,
 			reason: cleanReason,
+			dmNotification,
 			profile: this.summarizeModerationProfile(recorded.profile)
 		};
 	}
@@ -1380,6 +1611,14 @@ export class ChatTool {
 		if (member && !member.bannable)
 			return { ok: false, error: "Bot không thể ban thành viên này do thứ bậc role hoặc thiếu quyền." };
 
+		const dmNotification = await this.sendModerationDirectMessage({
+			member,
+			userId,
+			guild,
+			action: "ban",
+			reason: cleanReason
+		});
+
 		await guild.members.ban(userId, {
 			deleteMessageSeconds: 0,
 			reason: cleanReason
@@ -1391,7 +1630,10 @@ export class ChatTool {
 			actorId: discord.user?.id || null,
 			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
 			messageId: context?.message?.id || null,
-			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds),
+			metadata: {
+				dmNotification
+			}
 		});
 
 		return {
@@ -1401,6 +1643,7 @@ export class ChatTool {
 			userId,
 			displayName: member?.displayName || null,
 			reason: cleanReason,
+			dmNotification,
 			profile: this.summarizeModerationProfile(recorded.profile)
 		};
 	}

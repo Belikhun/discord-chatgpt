@@ -62,8 +62,9 @@ function normalizeProfile(userId, profile = {}) {
 	normalized.actions = Array.isArray(normalized.actions)
 		? normalized.actions.slice(0, 25)
 		: [];
+	const forgivenWarningIds = getForgivenWarningIds(normalized.actions);
 	const activeWarnings = normalized.actions
-		.filter((item) => isWarningEntryActive(item))
+		.filter((item) => isWarningEntryActive(item) && !forgivenWarningIds.has(item.id))
 		.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
 	normalized.totalWarningCount = Number.isFinite(normalized.totalWarningCount)
 		? normalized.totalWarningCount
@@ -106,6 +107,36 @@ function getWarningExpirationTimestamp(entry) {
 		return entry.createdAt + WARNING_EXPIRATION_MS;
 
 	return null;
+}
+
+function getForgivenWarningIds(actions = []) {
+	const forgivenIds = new Set();
+
+	for (const action of actions) {
+		if (action?.action !== "clear_warnings")
+			continue;
+
+		const clearedWarningIds = Array.isArray(action?.metadata?.clearedWarningIds)
+			? action.metadata.clearedWarningIds
+			: [];
+
+		for (const warningId of clearedWarningIds) {
+			if (warningId)
+				forgivenIds.add(warningId);
+		}
+	}
+
+	return forgivenIds;
+}
+
+function listActiveWarningEntries(profile, now = Date.now()) {
+	if (!profile || !Array.isArray(profile.actions))
+		return [];
+
+	const forgivenWarningIds = getForgivenWarningIds(profile.actions);
+	return profile.actions
+		.filter((item) => isWarningEntryActive(item, now) && !forgivenWarningIds.has(item.id))
+		.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
 }
 
 function isWarningEntryActive(entry, now = Date.now()) {
@@ -162,7 +193,7 @@ export function recordModerationAction(guildId, userId, {
 	if (!guildId)
 		throw new Error("Cần guildId để ghi trạng thái kiểm duyệt.");
 
-	if (!["warning", "kick", "ban", "delete_messages"].includes(action))
+	if (!["warning", "kick", "ban", "delete_messages", "clear_warnings"].includes(action))
 		throw new Error(`Hành động kiểm duyệt không được hỗ trợ: ${action}`);
 
 	const store = loadModerationStore();
@@ -190,6 +221,7 @@ export function recordModerationAction(guildId, userId, {
 
 	guildStore.history.unshift(entry);
 	guildStore.history = guildStore.history.slice(0, HISTORY_LIMIT);
+	let finalProfile = profile;
 
 	if (profile) {
 		profile.actions.unshift(entry);
@@ -211,7 +243,8 @@ export function recordModerationAction(guildId, userId, {
 			createdAt: entry.createdAt
 		};
 
-		guildStore.profiles[userId] = profile;
+		finalProfile = normalizeProfile(userId, profile);
+		guildStore.profiles[userId] = finalProfile;
 	}
 
 	saveModerationStore(store);
@@ -219,8 +252,40 @@ export function recordModerationAction(guildId, userId, {
 	return {
 		ok: true,
 		action: entry,
-		profile
+		profile: finalProfile
 	};
+}
+
+export function clearUserWarnings(guildId, userId, {
+	reason,
+	actorId,
+	channelId,
+	messageId,
+	messageIds,
+	metadata
+} = {}) {
+	if (!guildId || !userId)
+		throw new Error("Cần guildId và userId để xóa cảnh cáo của người dùng.");
+
+	const store = loadModerationStore();
+	const guildStore = getGuildStore(store, guildId);
+	const profile = normalizeProfile(userId, guildStore.profiles[userId]);
+	const activeWarnings = listActiveWarningEntries(profile);
+	const clearedWarningIds = activeWarnings.map((item) => item.id).filter(Boolean);
+
+	return recordModerationAction(guildId, userId, {
+		action: "clear_warnings",
+		reason,
+		actorId,
+		channelId,
+		messageId,
+		messageIds,
+		metadata: {
+			...(metadata && typeof metadata === "object" ? metadata : {}),
+			clearedWarningIds,
+			clearedWarningCount: clearedWarningIds.length
+		}
+	});
 }
 
 export function listGuildModerationProfiles(guildId, {

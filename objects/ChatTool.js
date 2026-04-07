@@ -5,7 +5,7 @@ import { scope } from "../logger.js";
 import { ALL_EMOJIS } from "../utils.js";
 import { listConversations as listStoredConversations } from "../store/conversation.js";
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
-import { getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory, WARNING_EXPIRATION_MS, WARNING_THRESHOLD_FOR_KICK } from "../store/moderation.js";
+import { clearUserWarnings, getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory, WARNING_EXPIRATION_MS, WARNING_THRESHOLD_FOR_KICK } from "../store/moderation.js";
 import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
 
 export class ChatTool {
@@ -18,6 +18,7 @@ export class ChatTool {
 
 	static moderationColors = {
 		warning: 0xF59E0B,
+		forgive: 0x16A34A,
 		kick: 0xF97316,
 		ban: 0xDC2626
 	};
@@ -477,6 +478,9 @@ export class ChatTool {
 				case "issue_warning":
 					return this.wrapToolOutput(call_id, await this.issueWarning(args, context));
 
+				case "clear_user_warnings":
+					return this.wrapToolOutput(call_id, await this.clearUserWarnings(args, context));
+
 				case "delete_messages":
 					return this.wrapToolOutput(call_id, await this.deleteMessages(args, context));
 
@@ -594,6 +598,36 @@ export class ChatTool {
 							type: ["array", "null"],
 							items: { type: "string" },
 							description: "Optional related message IDs used as evidence."
+						}
+					},
+					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
+				name: "clear_user_warnings",
+				description: "Clear all active warning status for a guild member when they have rejoined and sincerely apologized. This is a forgiveness action, not a general reset.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						guildId: {
+							type: ["string", "null"],
+							description: "Guild ID to moderate in. If null, use the current guild."
+						},
+						userId: {
+							type: "string",
+							description: "Discord user ID whose active warnings should be cleared."
+						},
+						reason: {
+							type: "string",
+							description: "Short explanation that the member rejoined and apologized, or another specific forgiveness reason."
+						},
+						evidenceMessageIds: {
+							type: ["array", "null"],
+							items: { type: "string" },
+							description: "Optional message IDs that show the apology or context for clearing warnings."
 						}
 					},
 					required: ["guildId", "userId", "reason", "evidenceMessageIds"],
@@ -738,7 +772,7 @@ export class ChatTool {
 						},
 						action: {
 							type: ["string", "null"],
-							description: "Optional action filter: warning, kick, ban, or delete_messages."
+							description: "Optional action filter: warning, clear_warnings, kick, ban, or delete_messages."
 						},
 						limit: {
 							type: ["number", "null"],
@@ -779,10 +813,15 @@ export class ChatTool {
 
 		return [
 			"Ngữ cảnh kiểm duyệt:",
-			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, delete_messages, kick_user, ban_user, query_guild_moderation, get_moderation_history.",
-			"- Nếu đoạn chat hiện tại có nhiều tin nhắn chửi tục, công kích hoặc xúc phạm người khác thì không được trả lời bằng [skip].",
+			"- Công cụ quản trị hiện khả dụng trong máy chủ này: issue_warning, clear_user_warnings, delete_messages, kick_user, ban_user, query_guild_moderation, get_moderation_history.",
+			"- Chỉ kiểm duyệt khi ngữ cảnh thật sự cho thấy quấy rối, lăng mạ, chửi bới nhắm vào người khác hoặc hành vi gây hại rõ ràng. Không được quá nhạy với đùa vui mơ hồ.",
+			"- Không gọi issue_warning chỉ vì một câu nói đùa nhẹ, cà khịa qua lại có vẻ đồng thuận, meme nội bộ, hoặc một lần chửi thề chung chung không nhắm vào ai.",
+			"- Nếu hai bên cùng đùa, không có dấu hiệu khó chịu, không có yêu cầu dừng lại, và không có hành vi nhắm mục tiêu lặp đi lặp lại, ưu tiên không kiểm duyệt.",
+			"- Hãy xem đó là hành vi cần kiểm duyệt khi có một hay nhiều dấu hiệu sau: xúc phạm nhắm đích danh, chửi bới lặp lại, hạ nhục cá nhân, miệt thị ngoại hình/giới tính/chủng tộc, đe dọa, quấy rối tình dục, bám theo gây áp lực, hoặc tiếp tục sau khi bên kia tỏ ra khó chịu hay yêu cầu dừng.",
+			"- Nếu ngữ cảnh còn mơ hồ giữa đùa và công kích thật, ưu tiên không cảnh cáo ngay. Chỉ cảnh cáo khi bằng chứng trong đoạn chat đủ rõ ràng.",
 			"- Mọi tin nhắn công khai gửi cho người dùng phải viết bằng tiếng Việt.",
 			`- Bậc xử lý đầu tiên: gọi issue_warning cho người vi phạm rồi gửi một cảnh cáo ngắn gọn công khai trong kênh. Mỗi cảnh cáo chỉ còn hiệu lực trong ${Math.floor(WARNING_EXPIRATION_MS / (60 * 60 * 1000))} giờ.`,
+			"- Nếu người đó đã quay lại máy chủ và xin lỗi một cách rõ ràng, chân thành, có thể gọi clear_user_warnings để xóa toàn bộ cảnh cáo còn hiệu lực của họ. Chỉ dùng khi ngữ cảnh thật sự cho thấy nên tha thứ.",
 			`- Chỉ gọi kick_user khi người đó đã có ít nhất ${WARNING_THRESHOLD_FOR_KICK} cảnh cáo còn hiệu lực và vẫn tiếp tục hành vi xấu. Có thể dùng delete_messages trước khi kick nếu cần dọn tin nhắn vi phạm.`,
 			"- Trước khi kick hoặc ban, hãy để công cụ gửi thông báo DM cho người vi phạm với lý do rõ ràng bằng tiếng Việt rồi mới thực hiện hành động.",
 			"- Nếu người đó đã từng bị kick, quay lại và vẫn tiếp tục hành vi cũ, hãy gọi ban_user vĩnh viễn với lý do rõ ràng bằng tiếng Việt.",
@@ -877,6 +916,9 @@ export class ChatTool {
 		switch (action) {
 			case "warning":
 				return "cảnh cáo";
+
+			case "clear_warnings":
+				return "xóa cảnh cáo";
 
 			case "kick":
 				return "kick";
@@ -1021,7 +1063,7 @@ export class ChatTool {
 			].join("\n")),
 			this.createSeparatorComponent(2, false),
 			this.createTextComponent(
-				"> Vui lòng dừng ngay hành vi vi phạm. Nếu tiếp tục tái phạm trong thời gian cảnh cáo còn hiệu lực, bạn có thể bị kick khỏi máy chủ."
+				"-# Vui lòng dừng ngay hành vi vi phạm. Nếu tiếp tục tái phạm trong thời gian cảnh cáo còn hiệu lực, bạn có thể bị kick khỏi máy chủ."
 			)
 		], this.moderationColors.warning);
 		const fallbackContent = [
@@ -1034,6 +1076,45 @@ export class ChatTool {
 		].join("\n");
 
 		return this.sendStyledNotice(channel, [warningCard], fallbackContent);
+	}
+
+	static async sendWarningClearNotice({ channel, member, reason, clearedWarningCount, profile }) {
+		if (!channel?.isTextBased?.()) {
+			return {
+				attempted: false,
+				sent: false,
+				error: "Không có kênh văn bản phù hợp để gửi thông báo xóa cảnh cáo."
+			};
+		}
+
+		const forgivenessCard = this.createContainerComponent([
+			this.createTextComponent("## ✅ Cập Nhật Hồ Sơ Kiểm Duyệt"),
+			this.createTextComponent([
+				`<@${member.id}> đã được **xóa toàn bộ cảnh cáo còn hiệu lực**.`,
+				"",
+				"**Lý do chấp nhận**",
+				reason
+			].join("\n")),
+			this.createSeparatorComponent(1, true),
+			this.createTextComponent([
+				`**Số cảnh cáo đã xóa:** ${clearedWarningCount}`,
+				`**Cảnh cáo đang còn hiệu lực:** **${profile?.warningCount || 0}/${WARNING_THRESHOLD_FOR_KICK}**`
+			].join("\n")),
+			this.createSeparatorComponent(2, false),
+			this.createTextComponent(
+				"-# Hồ sơ được làm sạch để người dùng có cơ hội bắt đầu lại. Nếu tái phạm, hệ thống sẽ ghi nhận lại từ đầu."
+			)
+		], this.moderationColors.forgive);
+
+		const fallbackContent = [
+			"✅ CẬP NHẬT HỒ SƠ KIỂM DUYỆT",
+			`${member.displayName || member.user?.username || member.id} đã được xóa toàn bộ cảnh cáo còn hiệu lực.`,
+			`Lý do: ${reason}`,
+			`Số cảnh cáo đã xóa: ${clearedWarningCount}`,
+			`Cảnh cáo đang còn hiệu lực: ${profile?.warningCount || 0}/${WARNING_THRESHOLD_FOR_KICK}`
+		].join("\n");
+
+		return this.sendStyledNotice(channel, [forgivenessCard], fallbackContent);
 	}
 
 	static buildModerationDmContent({ action, guild, reason }) {
@@ -1059,7 +1140,7 @@ export class ChatTool {
 					].join("\n")),
 					this.createSeparatorComponent(2, false),
 					this.createTextComponent(
-						"> Nếu bạn cho rằng đây là nhầm lẫn, hãy liên hệ đội ngũ quản trị của máy chủ để được xem xét lại."
+						"-# Nếu bạn cho rằng đây là nhầm lẫn, hãy liên hệ đội ngũ quản trị của máy chủ để được xem xét lại."
 					)
 				], isBan ? this.moderationColors.ban : this.moderationColors.kick)
 			],
@@ -1390,6 +1471,52 @@ export class ChatTool {
 			displayName: member.displayName,
 			reason: cleanReason,
 			warningExpiresAt: recorded.action.metadata?.expiresAt || null,
+			publicNotice,
+			profile: this.summarizeModerationProfile(recorded.profile)
+		};
+	}
+
+	static async clearUserWarnings({ guildId, userId, reason, evidenceMessageIds }, context) {
+		const access = await this.requireFullModerationAccess(context);
+		if (!access.ok)
+			return access;
+
+		const guild = await this.resolveGuild(guildId, context);
+		if (!guild)
+			return { ok: false, error: "Không tìm thấy máy chủ hoặc máy chủ không khả dụng trong ngữ cảnh hiện tại." };
+
+		const member = await this.resolveGuildMember(guild, userId);
+		if (!member)
+			return { ok: false, error: "Không tìm thấy thành viên mục tiêu trong máy chủ." };
+
+		const cleanReason = this.trimReason(reason);
+		if (!cleanReason)
+			return { ok: false, error: "Cần cung cấp lý do xóa cảnh cáo." };
+
+		const recorded = clearUserWarnings(guild.id, member.id, {
+			reason: cleanReason,
+			actorId: discord.user?.id || null,
+			channelId: context?.message?.channel?.id || context?.conversation?.channel?.id || null,
+			messageId: context?.message?.id || null,
+			messageIds: this.normalizeEvidenceMessageIds(evidenceMessageIds)
+		});
+		const clearedWarningCount = recorded.action.metadata?.clearedWarningCount || 0;
+		const publicNotice = await this.sendWarningClearNotice({
+			channel: context?.message?.channel || context?.conversation?.channel || null,
+			member,
+			reason: cleanReason,
+			clearedWarningCount,
+			profile: recorded.profile
+		});
+
+		return {
+			ok: true,
+			action: "clear_warnings",
+			guildId: guild.id,
+			userId: member.id,
+			displayName: member.displayName,
+			reason: cleanReason,
+			clearedWarningCount,
 			publicNotice,
 			profile: this.summarizeModerationProfile(recorded.profile)
 		};

@@ -113,7 +113,7 @@ export class ChatConversation {
 				role: "developer",
 				content: [{
 					type: "input_text",
-					text: "Tin nhắn mới nhất đã mention trực tiếp bạn bằng @. Bạn phải trả lời trực tiếp tin nhắn đó và không được trả về [skip]. Hãy trả lời bằng tiếng Việt."
+					text: "Tin nhắn mới nhất đã mention trực tiếp bạn bằng @. Bạn phải trả lời trực tiếp tin nhắn đó và không được trả về [skip]. Hãy trả lời theo ngôn ngữ của tin nhắn gần nhất: tiếng Việt nếu người dùng dùng tiếng Việt, tiếng Anh nếu người dùng dùng tiếng Anh, và chỉ trộn ngôn ngữ khi ngữ cảnh thật sự tự nhiên."
 				}]
 			});
 		}

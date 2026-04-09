@@ -1,4 +1,4 @@
-import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User, PermissionsBitField } from "discord.js";
+import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User, PermissionsBitField, ChannelType } from "discord.js";
 import { log, interactive } from "./logger.js";
 import { discord, authenticateDiscordClient } from "./clients/discord.js";
 import { bold, code, emoji } from "./format.js";
@@ -85,6 +85,38 @@ function buildCommands() {
 			}),
 
 		new SlashCommandBuilder()
+			.setName("blacklist")
+			.setDescription("Quản lý danh sách chặn bot theo kênh")
+			.addChannelOption((option) => {
+				return option
+					.setName("channel")
+					.setDescription("Kênh cần chặn. Nếu bỏ trống sẽ dùng kênh hiện tại.")
+					.setRequired(false)
+					.addChannelTypes(
+						ChannelType.GuildText,
+						ChannelType.GuildAnnouncement,
+						ChannelType.PublicThread,
+						ChannelType.PrivateThread
+					);
+			}),
+
+		new SlashCommandBuilder()
+			.setName("blacklist_remove")
+			.setDescription("Gỡ chặn bot phản hồi trong một kênh văn bản")
+			.addChannelOption((option) => {
+				return option
+					.setName("channel")
+					.setDescription("Kênh cần gỡ chặn. Nếu bỏ trống sẽ dùng kênh hiện tại.")
+					.setRequired(false)
+					.addChannelTypes(
+						ChannelType.GuildText,
+						ChannelType.GuildAnnouncement,
+						ChannelType.PublicThread,
+						ChannelType.PrivateThread
+					);
+			}),
+
+		new SlashCommandBuilder()
 			.setName("nickname")
 			.setDescription("Đặt nickname cho bot trong máy chủ hiện tại")
 			.addStringOption((option) => {
@@ -119,20 +151,26 @@ async function registerCommandsToGuild(guildId) {
 	}
 }
 
-// At startup: if a dev/test GUILD_ID is provided, register commands there
-(async () => {
+async function syncCommandsToAllGuilds() {
 	const log = interactive("commands");
+	const guilds = await discord.guilds.fetch();
 
-	if (GUILD_ID) {
-		try {
-			await registerCommandsToGuild(GUILD_ID);
-		} catch (e) {
-			log.error(`Không thể đăng ký lệnh cho GUILD_ID=${GUILD_ID}: ${e.message}`);
-		}
-	} else {
-		log.await("GUILD_ID không được cấu hình, bỏ qua đăng ký lệnh tại khởi động. Commands sẽ được đăng ký khi bot vào guild mới.");
+	if (guilds.size === 0) {
+		log.await("Bot hiện chưa ở guild nào, không có commands để đồng bộ.");
+		return;
 	}
-})();
+
+	log.await(`Đang đồng bộ commands tới ${guilds.size} guild hiện có.`);
+	for (const guild of guilds.values()) {
+		try {
+			await registerCommandsToGuild(guild.id);
+		} catch (e) {
+			log.error(`Không thể đồng bộ commands cho guild ${guild.id}: ${e.message}`);
+		}
+	}
+
+	log.success(`Đã hoàn tất đồng bộ commands cho ${guilds.size} guild.`);
+}
 
 // When the bot joins a new guild, register the commands for that guild so
 // they are immediately available (fast, guild-scoped registration).
@@ -163,6 +201,36 @@ discord.on(Events.GuildCreate, async (guild) => {
  */
 function hasManagePermission(guild, user) {
 	return guild.members.cache.get(user.id)?.permissions.has("ManageMessages") || false;
+}
+
+function getBlacklistedChannels() {
+	return config.get("channelBlacklist", {});
+}
+
+function isChannelBlacklisted(channelId) {
+	return Boolean(getBlacklistedChannels()?.[channelId]);
+}
+
+function setChannelBlacklist(channelId, blacklisted) {
+	const channels = { ...getBlacklistedChannels() };
+
+	if (blacklisted)
+		channels[channelId] = true;
+	else
+		delete channels[channelId];
+
+	config.set("channelBlacklist", channels);
+}
+
+function resolveBlacklistTargetChannel(interaction) {
+	const channel = interaction.options.getChannel("channel") || interaction.channel;
+	if (!channel)
+		return null;
+
+	if (!channel.guildId || !channel.isTextBased?.())
+		return null;
+
+	return channel;
 }
 
 function buildErrorEmbed(error, { actorName, actorIcon } = {}) {
@@ -276,8 +344,14 @@ function pickWelcomeChannel(guild) {
 	return guild.channels.cache.find((channel) => canSend(channel)) || null;
 }
 
-discord.on(Events.ClientReady, () => {
+discord.on(Events.ClientReady, async () => {
 	log.success(`Đã đăng nhập dưới tài khoản ${discord.user.tag}!`);
+
+	try {
+		await syncCommandsToAllGuilds();
+	} catch (err) {
+		log.error(`Không thể đồng bộ commands khi khởi động: ${err.message}`);
+	}
 });
 
 discord.on("error", (err) => {
@@ -423,6 +497,99 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 				break;
 			}
 
+			case "blacklist": {
+				if (!interaction.guild) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Lệnh này chỉ có thể sử dụng trong máy chủ!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				const targetChannel = resolveBlacklistTargetChannel(interaction);
+				if (!targetChannel) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Chỉ có thể blacklist các kênh văn bản trong máy chủ.`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				if (isChannelBlacklisted(targetChannel.id)) {
+					await interaction.reply({
+						content: `${emoji("acinfo")} Kênh <#${targetChannel.id}> đã nằm trong blacklist rồi.`
+					});
+
+					return;
+				}
+
+				setChannelBlacklist(targetChannel.id, true);
+				setConversation(targetChannel.id, null);
+
+				await interaction.reply({
+					content: `${emoji("acinfo")} Bot sẽ ngừng phản hồi trong kênh <#${targetChannel.id}> cho tới khi được gỡ khỏi blacklist.`
+				});
+
+				break;
+			}
+
+			case "blacklist_remove": {
+				if (!interaction.guild) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Lệnh này chỉ có thể sử dụng trong máy chủ!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				if (!hasManagePermission(interaction.guild, interaction.user)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				const targetChannel = resolveBlacklistTargetChannel(interaction);
+				if (!targetChannel) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Chỉ có thể gỡ blacklist cho các kênh văn bản trong máy chủ.`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
+				if (!isChannelBlacklisted(targetChannel.id)) {
+					await interaction.reply({
+						content: `${emoji("acinfo")} Kênh <#${targetChannel.id}> hiện không nằm trong blacklist.`
+					});
+
+					return;
+				}
+
+				setChannelBlacklist(targetChannel.id, false);
+
+				await interaction.reply({
+					content: `${emoji("acinfo")} Đã gỡ kênh <#${targetChannel.id}> khỏi blacklist. Bot có thể phản hồi lại trong kênh này.`
+				});
+
+				break;
+			}
+
 			case "nickname": {
 				if (!hasManagePermission(interaction.guild, interaction.user)) {
 					await interaction.reply({
@@ -485,6 +652,11 @@ discord.on(Events.MessageCreate, async (message) => {
 	// 	return;
 	if (message.author.id === discord.user.id)
 		return;
+
+	if (message.guild && isChannelBlacklisted(message.channelId)) {
+		log.debug(`Bỏ qua tin nhắn trong kênh blacklist ${message.channelId}.`);
+		return;
+	}
 
 	if (!message.content && !message.attachments.size && !message.components.length)
 		return;

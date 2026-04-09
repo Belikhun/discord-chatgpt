@@ -70,7 +70,8 @@ export class ChatConversation {
 			" - Channel mention: <#{channel.id}>",
 			" - Markdown: *italic*, **bold**, `code`, ```blocks```",
 			" - Timestamps: <t:unix[:style]>",
-			" - Emojis: :emoji_name: or Unicode emoji. You may also use custom emojis seen from other users, but only in full Discord format (<:name:id> or <a:name:id>).",
+			" - Emojis: use :emoji_name: or Unicode emoji only for your own emoji usage. Do not invent or emit full Discord custom emoji codes for available emojis; they will be resolved after generation.",
+			" - If you directly copy or reuse a full custom emoji from another user's message, preserve that exact full Discord format as written (<:name:id> or <a:name:id>).",
 			"",
 			"Rules:",
 			" - Reply in plain text only — no JSON or structural output.",
@@ -395,10 +396,22 @@ export class ChatConversation {
 		if (!text)
 			return text;
 
+		const reusableCustomEmojis = this.getReusableCustomEmojiMentions();
 		const protectedEmojis = [];
+		let normalizedKnownEmojis = 0;
 		let replacedEmojis = 0;
 		let unknownEmojis = 0;
-		let output = text.replaceAll(/<a?:[a-zA-Z0-9_-]+:\d+>/g, (match) => {
+		let output = text.replaceAll(/<(a?):([a-zA-Z0-9_-]+):(\d+)>/g, (match, animatedFlag, name, emojiId) => {
+			if (!reusableCustomEmojis.has(match)) {
+				const lookup = ALL_EMOJIS[name] || ALL_EMOJIS[name?.toLowerCase() || ""];
+				const resolvedName = ALL_EMOJIS[name] ? name : name?.toLowerCase();
+
+				if (lookup && lookup[0] === emojiId) {
+					normalizedKnownEmojis += 1;
+					return `<:${resolvedName}:${emojiId}>`;
+				}
+			}
+
 			const index = protectedEmojis.length;
 			protectedEmojis.push(match);
 			return `__CUSTOM_EMOJI_${index}__`;
@@ -411,9 +424,9 @@ export class ChatConversation {
 
 			if (lookup) {
 				this.log.debug(`Resolved emoji :${name}: to ID ${lookup[0]}`);
-				const [emojiId, animated] = lookup;
+				const [emojiId] = lookup;
 				replacedEmojis += 1;
-				return `<${animated ? "a" : ""}:${resolvedName}:${emojiId}>`;
+				return `<:${resolvedName}:${emojiId}>`;
 			}
 
 			unknownEmojis += 1;
@@ -426,9 +439,28 @@ export class ChatConversation {
 			return restored || match;
 		});
 
-		this.log.debug(`Emoji replace stats: protected=${protectedEmojis.length}, replaced=${replacedEmojis}, unknown=${unknownEmojis}`);
+		this.log.debug(`Emoji replace stats: protected=${protectedEmojis.length}, normalized=${normalizedKnownEmojis}, replaced=${replacedEmojis}, unknown=${unknownEmojis}`);
 		this.log.debug(`Final output after emoji processing: ${output}`);
 		return output;
+	}
+
+	getReusableCustomEmojiMentions() {
+		const emojis = new Set();
+
+		for (const item of this.history) {
+			if (item?.role !== "user")
+				continue;
+
+			for (const content of item.content || []) {
+				if (content?.type !== "input_text" || typeof content.text !== "string")
+					continue;
+
+				for (const match of content.text.matchAll(/<a?:[a-zA-Z0-9_-]+:\d+>/g))
+					emojis.add(match[0]);
+			}
+		}
+
+		return emojis;
 	}
 
 	extractOutputText(output = []) {

@@ -653,10 +653,8 @@ discord.on(Events.MessageCreate, async (message) => {
 	if (message.author.id === discord.user.id)
 		return;
 
-	if (message.guild && isChannelBlacklisted(message.channelId)) {
-		log.debug(`Bỏ qua tin nhắn trong kênh blacklist ${message.channelId}.`);
+	if (message.guild && isChannelBlacklisted(message.channelId))
 		return;
-	}
 
 	if (!message.content && !message.attachments.size && !message.components.length)
 		return;

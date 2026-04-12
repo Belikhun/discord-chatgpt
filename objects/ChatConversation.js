@@ -407,8 +407,10 @@ export class ChatConversation {
 				const resolvedName = ALL_EMOJIS[name] ? name : name?.toLowerCase();
 
 				if (lookup && lookup[0] === emojiId) {
+					const [, isAnimated] = lookup;
+					const shouldAnimate = animatedFlag === "a" || Boolean(isAnimated);
 					normalizedKnownEmojis += 1;
-					return `<:${resolvedName}:${emojiId}>`;
+					return `<${shouldAnimate ? "a" : ""}:${resolvedName}:${emojiId}>`;
 				}
 			}
 
@@ -424,9 +426,9 @@ export class ChatConversation {
 
 			if (lookup) {
 				this.log.debug(`Resolved emoji :${name}: to ID ${lookup[0]}`);
-				const [emojiId] = lookup;
+				const [emojiId, isAnimated] = lookup;
 				replacedEmojis += 1;
-				return `<:${resolvedName}:${emojiId}>`;
+				return `<${isAnimated ? "a" : ""}:${resolvedName}:${emojiId}>`;
 			}
 
 			unknownEmojis += 1;

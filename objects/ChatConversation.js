@@ -481,6 +481,10 @@ export class ChatConversation {
 		return texts.join("\n");
 	}
 
+	resolveDisplayName(user, member = null) {
+		return member?.displayName || user?.displayName || user?.username || "";
+	}
+
 	/**
 	 * Pre-process a Discord message for chat completion.
 	 *
@@ -492,7 +496,7 @@ export class ChatConversation {
 	 */
 	async processMessage(message) {
 		let { author, content, mentions } = message;
-		const displayName = author.displayName || author.username;
+		const displayName = this.resolveDisplayName(author, message.member);
 
 		if (message.components.length > 0) {
 			for (const component of message.components) {
@@ -521,14 +525,14 @@ export class ChatConversation {
 			data.replyingTo = {
 				id: ref.author.id,
 				username: ref.author.username,
-				displayName: ref.author.displayName,
+				displayName: this.resolveDisplayName(ref.author, ref.member),
 				messageId: ref.id
 			};
 		}
 
 		// Replace user mentions with expanded format
 		for (let [id, user] of mentions.users) {
-			const userDisplay = user.displayName || user.username;
+			const userDisplay = this.resolveDisplayName(user, mentions.members?.get(id));
 			const mentionRegex = new RegExp(`<@!?${user.id}>`, 'g'); // cover both <@id> and <@!id>
 			const replacement = `[${userDisplay} (${user.username}) <@${user.id}>]`;
 			data.message = data.message.replace(mentionRegex, replacement);

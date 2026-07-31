@@ -112,7 +112,7 @@ async function generateAndApplyMemorySummary(guildId, store, model) {
 	if (items.length === 0)
 		return;
 
-	const summaryModel = model || env.MODEL_DEFAULT || "gpt-5-mini";
+	const summaryModel = model || env.MODEL_DEFAULT || "gpt-5.6-luna";
 	const instructions = "Summarize the following Discord memory items into a short, helpful summary for future replies. Use the same language as the memories. Keep it to 1-3 sentences. Do not include IDs.";
 	const inputText = items
 		.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))

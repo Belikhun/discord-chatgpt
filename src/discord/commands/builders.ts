@@ -4,14 +4,10 @@ import {
 	InteractionContextType,
 	SlashCommandBuilder
 } from "discord.js";
-import { getDefaultProvider } from "../../ai/registry";
-
 /**
  * Build the guild-scoped commands (JSON) used by the Discord API.
  */
 export function buildCommands(): any[] {
-	const models = getDefaultProvider().models;
-
 	const commands = [
 		new SlashCommandBuilder()
 			.setName("clear")
@@ -21,10 +17,13 @@ export function buildCommands(): any[] {
 			.setName("model")
 			.setDescription("Đặt model sẽ sử dụng cho kênh hiện tại")
 			.addStringOption((option) => {
+				// Autocompleted instead of a fixed choice list: the combined
+				// catalogue of every configured provider exceeds Discord's
+				// 25-choice limit for options.
 				return option.setName("model")
-					.setDescription("Tên model hiện tại được hỗ trợ bởi OpenAI")
+					.setDescription("Tên model sẽ sử dụng (gõ để tìm kiếm)")
 					.setRequired(true)
-					.addChoices(...models.map((i) => ({ name: i, value: i })));
+					.setAutocomplete(true);
 			}),
 
 		new SlashCommandBuilder()
@@ -107,8 +106,6 @@ export function buildCommands(): any[] {
  * bot DMs, group DMs and servers where only the user installed the app.
  */
 export function buildGlobalCommands(): any[] {
-	const models = getDefaultProvider().models;
-
 	const commands = [
 		new SlashCommandBuilder()
 			.setName("b")
@@ -131,7 +128,7 @@ export function buildGlobalCommands(): any[] {
 				return option.setName("model")
 					.setDescription("Model sẽ sử dụng cho lượt hỏi này (mặc định dùng model của kênh)")
 					.setRequired(false)
-					.addChoices(...models.map((i) => ({ name: i, value: i })));
+					.setAutocomplete(true);
 			})
 			.addStringOption((option) => {
 				return option.setName("thinking")

@@ -3,6 +3,7 @@ import { AttachmentBuilder, DMChannel, MediaGalleryBuilder, MessageFlags, TextDi
 import { bold, code, emoji, formatTime, h3, mention, sh, space, timestampMessage } from "../format";
 import { scope, type Logger } from "../logger";
 import { env } from "../env";
+import { ModelTrait } from "../ai/types";
 import type { MessagePart, ModelResponse, StreamEvent, ToolCall, ToolResultItem } from "../ai/types";
 import { runToolCalls } from "../tools/registry";
 import type { ChatConversation } from "./ChatConversation";
@@ -277,7 +278,7 @@ export class ChatCompletion {
 	}
 
 	isReasoningModel(): boolean {
-		return this.conversation.provider.isReasoningModel(this.model);
+		return this.conversation.provider.hasTrait(this.model, ModelTrait.Thinking);
 	}
 
 	prepareImageIndex(index: number): AttachmentBuilder {

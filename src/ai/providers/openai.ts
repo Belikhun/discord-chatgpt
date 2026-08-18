@@ -1,8 +1,11 @@
 import OpenAI from "openai";
-import { env } from "../../env";
+import type { ProviderConfig } from "../../env";
+import { extractItemTexts } from "../registry";
+import { ModelTrait } from "../types";
 import type {
 	AIProvider,
 	ConversationItem,
+	ModelInfo,
 	ModelRequest,
 	ModelResponse,
 	ProviderItem,
@@ -11,58 +14,50 @@ import type {
 	ToolDefinition
 } from "../types";
 
-// Discord limits a slash command option to 25 choices, and this list is fed
-// straight into `/model` via addChoices, so it must stay at or under 25.
-const MODELS = [
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-5.4",
-	"gpt-5.4-mini",
-	"gpt-5.4-nano",
-	"gpt-5.2-pro",
-	"gpt-5.2",
-	"gpt-5.1",
-	"gpt-5",
-	"gpt-5-mini",
-	"gpt-5-nano",
-	"o1-pro",
-	"gpt-4.1",
-	"gpt-4.1-mini",
-	"gpt-4.1-nano",
-	"o4-mini",
-	"o3",
-	"o3-mini",
-	"o1",
-	"gpt-4o",
-	"gpt-4o-mini",
-	"gpt-4-turbo"
-];
+const {
+	Thinking,
+	FunctionCalling,
+	WebSearch,
+	ViewImage,
+	ReadDocument,
+	GenerateImage
+} = ModelTrait;
 
-const SUPPORT_SEARCH = [
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-5.4",
-	"gpt-5.2",
-	"gpt-5.1",
-	"gpt-5",
-	"gpt-5-mini",
-	"gpt-4.1",
-	"gpt-4.1-mini",
-	"gpt-4o",
-	"gpt-4o-mini"
-];
+/** Traits shared by every model here: they all take tools and read documents. */
+const COMMON: readonly ModelTrait[] = [FunctionCalling, ViewImage, ReadDocument];
 
-const SUPPORT_IMAGE_GENERATION = [
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-5.4",
-	"gpt-5.2",
-	"gpt-5.1",
-	"gpt-5",
-	"gpt-5-nano"
+/**
+ * Model catalogue, in the order it is offered to users.
+ *
+ * Thinking membership deliberately mirrors the historical
+ * `/^o\d/ || /^gpt-5(\.|$)/` test — note that `gpt-5-mini` and `gpt-5-nano` are
+ * excluded by it, which is why they carry no Thinking trait.
+ */
+const CATALOGUE: readonly { id: string; traits: readonly ModelTrait[] }[] = [
+	{ id: "gpt-5.6-sol", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5.6-terra", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5.6-luna", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5.4", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5.4-mini", traits: [...COMMON, Thinking] },
+	{ id: "gpt-5.4-nano", traits: [...COMMON, Thinking] },
+	{ id: "gpt-5.2-pro", traits: [...COMMON, Thinking] },
+	{ id: "gpt-5.2", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5.1", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5", traits: [...COMMON, Thinking, WebSearch, GenerateImage] },
+	{ id: "gpt-5-mini", traits: [...COMMON, WebSearch] },
+	{ id: "gpt-5-nano", traits: [...COMMON, GenerateImage] },
+	{ id: "o1-pro", traits: [...COMMON, Thinking] },
+	{ id: "gpt-4.1", traits: [...COMMON, WebSearch] },
+	{ id: "gpt-4.1-mini", traits: [...COMMON, WebSearch] },
+	{ id: "gpt-4.1-nano", traits: [...COMMON] },
+	{ id: "o4-mini", traits: [...COMMON, Thinking] },
+	{ id: "o3", traits: [...COMMON, Thinking] },
+	// o3-mini is text-only.
+	{ id: "o3-mini", traits: [FunctionCalling, Thinking] },
+	{ id: "o1", traits: [...COMMON, Thinking] },
+	{ id: "gpt-4o", traits: [...COMMON, WebSearch] },
+	{ id: "gpt-4o-mini", traits: [...COMMON, WebSearch] },
+	{ id: "gpt-4-turbo", traits: [...COMMON] }
 ];
 
 /**
@@ -74,27 +69,48 @@ const SUPPORT_IMAGE_GENERATION = [
  */
 export class OpenAIProvider implements AIProvider {
 	readonly id = "openai";
-	readonly models = MODELS;
+	readonly models: readonly ModelInfo[] = CATALOGUE.map((entry) => ({
+		id: entry.id,
+		// OpenAI model IDs are already the name people know them by.
+		displayName: entry.id,
+		provider: "openai",
+		traits: entry.traits
+	}));
 
 	private client: OpenAI;
 
-	constructor(apiKey: string = env.OPENAI_API_KEY) {
-		this.client = new OpenAI({ apiKey });
+	constructor(config: ProviderConfig) {
+		// Optional settings are only forwarded when set, so the SDK keeps its own
+		// defaults (and its process.env fallbacks) otherwise.
+		this.client = new OpenAI({
+			apiKey: config.API_KEY,
+			...(config.BASE_URL ? { baseURL: config.BASE_URL } : {}),
+			...(config.ORGANIZATION ? { organization: config.ORGANIZATION } : {}),
+			...(config.PROJECT ? { project: config.PROJECT } : {})
+		});
 	}
 
-	isReasoningModel(model: string): boolean {
-		return (/^o\d/.test(model) || /^gpt-5(\.|$)/.test(model));
+	getModelInfo(model: string): ModelInfo {
+		const known = this.models.find((entry) => entry.id === model);
+		if (known)
+			return known;
+
+		// Not catalogued (a hand-written MODEL_DEFAULT, or a model released
+		// after this list): infer thinking from the naming scheme, exactly as
+		// the pre-trait implementation did.
+		const traits: ModelTrait[] = [ModelTrait.FunctionCalling];
+		if (/^o\d/.test(model) || /^gpt-5(\.|$)/.test(model))
+			traits.push(ModelTrait.Thinking);
+
+		return { id: model, displayName: model, provider: this.id, traits };
 	}
 
-	supportsWebSearch(model: string): boolean {
-		return SUPPORT_SEARCH.includes(model);
+	hasTrait(model: string, trait: ModelTrait): boolean {
+		return this.getModelInfo(model).traits.includes(trait);
 	}
 
-	supportsImageGeneration(model: string): boolean {
-		return SUPPORT_IMAGE_GENERATION.includes(model);
-	}
-
-	private serializeItem(item: ConversationItem): Record<string, any> {
+	/** Returns null for items that carry nothing this provider can send. */
+	private serializeItem(item: ConversationItem): Record<string, any> | null {
 		switch (item.kind) {
 			case "message":
 				return {
@@ -114,8 +130,21 @@ export class OpenAIProvider implements AIProvider {
 					})
 				};
 
-			case "provider":
-				return item.item;
+			case "provider": {
+				if (item.provider === this.id)
+					return item.item;
+
+				// History from another provider: keep the text, drop the
+				// provider-specific structure the Responses API would reject.
+				const text = extractItemTexts(item).join("\n").trim();
+				if (!text)
+					return null;
+
+				return {
+					role: "assistant",
+					content: [{ type: "output_text", text }]
+				};
+			}
 
 			case "tool_result":
 				return {
@@ -129,10 +158,10 @@ export class OpenAIProvider implements AIProvider {
 	private serializeTools(request: ModelRequest): Record<string, any>[] {
 		const tools: Record<string, any>[] = [];
 
-		if (request.enableWebSearch && this.supportsWebSearch(request.model))
+		if (request.enableWebSearch && this.hasTrait(request.model, ModelTrait.WebSearch))
 			tools.push({ type: "web_search_preview" });
 
-		if (request.enableImageGeneration && this.supportsImageGeneration(request.model))
+		if (request.enableImageGeneration && this.hasTrait(request.model, ModelTrait.GenerateImage))
 			tools.push({ type: "image_generation" });
 
 		for (const tool of request.tools) {
@@ -152,11 +181,13 @@ export class OpenAIProvider implements AIProvider {
 		const payload: Record<string, any> = {
 			model: request.model,
 			instructions: request.instructions,
-			input: request.input.map((item) => this.serializeItem(item)),
+			input: request.input
+				.map((item) => this.serializeItem(item))
+				.filter((item): item is Record<string, any> => item !== null),
 			tools: this.serializeTools(request)
 		};
 
-		if (request.reasoningEffort && this.isReasoningModel(request.model)) {
+		if (request.reasoningEffort && this.hasTrait(request.model, ModelTrait.Thinking)) {
 			payload.reasoning = {
 				effort: request.reasoningEffort || "medium",
 				summary: "auto"
@@ -366,5 +397,3 @@ export class OpenAIProvider implements AIProvider {
 		return texts;
 	}
 }
-
-export const openAIProvider = new OpenAIProvider();

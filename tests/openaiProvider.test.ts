@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { OpenAIProvider } from "../src/ai/providers/openai";
-import type { ModelRequest, StreamEvent } from "../src/ai/types";
+import { ModelTrait, type ModelRequest, type StreamEvent } from "../src/ai/types";
 
-const provider = new OpenAIProvider("test-key");
+const provider = new OpenAIProvider({ API_KEY: "test-key" });
 
 // Private methods are exercised directly: they define the OpenAI wire format,
 // which must stay byte-compatible with the pre-refactor payloads.
@@ -17,6 +17,35 @@ function baseRequest(overrides: Partial<ModelRequest> = {}): ModelRequest {
 		...overrides
 	};
 }
+
+describe("provider configuration", () => {
+	test("API key is handed to the SDK client", () => {
+		const configured = new OpenAIProvider({ API_KEY: "sk-configured" });
+		expect((configured as any).client.apiKey).toBe("sk-configured");
+	});
+
+	test("optional settings are forwarded when set", () => {
+		const configured = new OpenAIProvider({
+			API_KEY: "sk-test",
+			BASE_URL: "https://gateway.example/v1",
+			ORGANIZATION: "org-1",
+			PROJECT: "proj-1"
+		});
+		const client = (configured as any).client;
+
+		expect(client.baseURL).toBe("https://gateway.example/v1");
+		expect(client.organization).toBe("org-1");
+		expect(client.project).toBe("proj-1");
+	});
+
+	test("empty optional settings leave the SDK defaults alone", () => {
+		const configured = new OpenAIProvider({ API_KEY: "sk-test", BASE_URL: "" });
+		const client = (configured as any).client;
+
+		expect(client.baseURL).toBe("https://api.openai.com/v1");
+		expect(client.organization).toBeNull();
+	});
+});
 
 describe("OpenAI wire serialization", () => {
 	test("user message parts serialize to input_text / input_image", () => {
@@ -75,6 +104,23 @@ describe("OpenAI wire serialization", () => {
 		// Same object references — nothing added, dropped, or cloned.
 		expect(payload.input[0]).toBe(rawReasoning);
 		expect(payload.input[1]).toBe(rawFunctionCall);
+	});
+
+	test("items from another provider are downconverted, not sent raw", () => {
+		const streaming = new OpenAIProvider({ API_KEY: "k" });
+		// A Gemini-shaped item the Responses API would reject verbatim.
+		const foreign = {
+			kind: "provider" as const,
+			provider: "gemini",
+			item: { role: "model", parts: [{ text: "from gemini" }] }
+		};
+
+		const payload = (streaming as any).buildPayload(baseRequest({ input: [foreign] }));
+
+		// Nothing registered can extract Gemini text here, so the item is
+		// dropped rather than corrupting the request.
+		expect(payload.input).toEqual([]);
+		expect(JSON.stringify(payload.input)).not.toContain("parts");
 	});
 
 	test("tool results serialize to function_call_output with the frozen JSON string", () => {
@@ -167,24 +213,55 @@ describe("reasoning parameter gating", () => {
 	});
 });
 
-describe("model capabilities", () => {
-	test("model catalogue stays within Discord's 25-choice limit", () => {
-		expect(provider.models.length).toBeLessThanOrEqual(25);
+describe("model traits", () => {
+	test("web search and image generation traits match the historical lists", () => {
+		const search = provider.models.filter((m) => m.traits.includes(ModelTrait.WebSearch)).map((m) => m.id);
+		const images = provider.models.filter((m) => m.traits.includes(ModelTrait.GenerateImage)).map((m) => m.id);
+
+		expect(search).toEqual([
+			"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.2", "gpt-5.1",
+			"gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"
+		]);
+		expect(images).toEqual([
+			"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.2", "gpt-5.1",
+			"gpt-5", "gpt-5-nano"
+		]);
 	});
 
-	test("capability checks match the catalogue", () => {
-		expect(provider.supportsWebSearch("gpt-4o")).toBe(true);
-		expect(provider.supportsWebSearch("o3")).toBe(false);
-		expect(provider.supportsImageGeneration("gpt-5-nano")).toBe(true);
-		expect(provider.supportsImageGeneration("gpt-4o")).toBe(false);
-		expect(provider.isReasoningModel("o1-pro")).toBe(true);
-		expect(provider.isReasoningModel("gpt-4.1")).toBe(false);
+	test("thinking membership matches the historical /^o\\d|^gpt-5(\\.|$)/ test", () => {
+		const isReasoning = (model: string) => provider.hasTrait(model, ModelTrait.Thinking);
+
+		expect(isReasoning("o1-pro")).toBe(true);
+		expect(isReasoning("o3-mini")).toBe(true);
+		expect(isReasoning("gpt-5")).toBe(true);
+		expect(isReasoning("gpt-5.4")).toBe(true);
+		expect(isReasoning("gpt-4.1")).toBe(false);
+		expect(isReasoning("gpt-4o")).toBe(false);
+		// Quirk preserved from the original regex: the hyphenated gpt-5
+		// variants were never treated as reasoning models.
+		expect(isReasoning("gpt-5-mini")).toBe(false);
+		expect(isReasoning("gpt-5-nano")).toBe(false);
+	});
+
+	test("uncatalogued models infer thinking from their name", () => {
+		expect(provider.hasTrait("gpt-5.9-unlisted", ModelTrait.Thinking)).toBe(true);
+		expect(provider.hasTrait("o9-preview", ModelTrait.Thinking)).toBe(true);
+		expect(provider.hasTrait("some-other-model", ModelTrait.Thinking)).toBe(false);
+		// Unknown models never claim provider-side built-ins.
+		expect(provider.hasTrait("gpt-5.9-unlisted", ModelTrait.WebSearch)).toBe(false);
+	});
+
+	test("every catalogued model can call functions and names its provider", () => {
+		for (const model of provider.models) {
+			expect(model.provider).toBe("openai");
+			expect(model.traits).toContain(ModelTrait.FunctionCalling);
+		}
 	});
 });
 
 describe("streaming event normalization", () => {
 	async function collectEvents(sourceEvents: Record<string, any>[]): Promise<StreamEvent[]> {
-		const streaming = new OpenAIProvider("test-key");
+		const streaming = new OpenAIProvider({ API_KEY: "test-key" });
 
 		// Stub the SDK call: stream() must translate each source event 1:1, in order.
 		(streaming as any).client = {

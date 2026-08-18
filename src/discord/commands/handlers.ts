@@ -7,6 +7,7 @@ import { resolveAssistantConversation } from "../../conversation/resolve";
 import { InteractionMessage } from "../InteractionMessage";
 import { buildErrorEmbed } from "../errorEmbed";
 import { isChannelBlacklisted, resolveBlacklistTargetChannel, setChannelBlacklist } from "../blacklist";
+import { isKnownModel } from "../../ai/registry";
 
 /**
  * Check if the user has Manage Messages permission in the guild.
@@ -38,6 +39,17 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 				const model = interaction.options.getString("model") || null;
 				const thinking = interaction.options.getString("thinking") || null;
 
+				// The model option is autocompleted, so the value can be
+				// anything the user typed.
+				if (model && !isKnownModel(model)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Model ${code(model)} không tồn tại. Hãy chọn một model từ danh sách gợi ý.`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
 				const conversation = resolveAssistantConversation(interaction, { model, thinking });
 				const message = new InteractionMessage(interaction, prompt);
 				await conversation.handle(message);
@@ -56,6 +68,16 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 				}
 
 				const model = interaction.options.getString("model", true);
+
+				if (!isKnownModel(model)) {
+					await interaction.reply({
+						content: `${emoji("acerror")} Model ${code(model)} không tồn tại. Hãy chọn một model từ danh sách gợi ý.`,
+						ephemeral: true
+					});
+
+					return;
+				}
+
 				setConversation(interaction.channelId, null);
 				config.set(`model.${interaction.channelId}`, model);
 

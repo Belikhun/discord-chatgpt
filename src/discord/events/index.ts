@@ -3,6 +3,7 @@ import { log, interactive } from "../../logger";
 import { discord } from "../client";
 import { registerCommandsToGuild, registerGlobalCommands, syncCommandsToAllGuilds } from "../commands/registration";
 import { handleChatInputCommand } from "../commands/handlers";
+import { handleAutocomplete } from "../commands/autocomplete";
 import { handleMessageCreate } from "./messageCreate";
 import { handleGuildMemberAdd } from "./guildMemberAdd";
 
@@ -49,6 +50,11 @@ export function registerEvents(): void {
 	discord.on(Events.GuildMemberAdd, handleGuildMemberAdd);
 
 	discord.on(Events.InteractionCreate, async (interaction) => {
+		if (interaction.isAutocomplete()) {
+			await handleAutocomplete(interaction);
+			return;
+		}
+
 		if (!interaction.isChatInputCommand())
 			return;
 

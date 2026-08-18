@@ -5,6 +5,7 @@ import { ALL_EMOJIS } from "../emojis";
 import { any } from "../utils";
 import { discord } from "../discord/client";
 import { getProviderForModel } from "../ai/registry";
+import { ModelTrait } from "../ai/types";
 import type { ChatMessage, ConversationItem, HistoryEntry, MessagePart, ReasoningConfig, ToolDefinition } from "../ai/types";
 import { getToolDefinitions, runToolCalls, buildDeveloperMessages } from "../tools/registry";
 import type { ToolContext } from "../tools/types";
@@ -153,7 +154,7 @@ export class ChatConversation {
 	}
 
 	isReasoningModel(): boolean {
-		return this.provider.isReasoningModel(this.model);
+		return this.provider.hasTrait(this.model, ModelTrait.Thinking);
 	}
 
 	getReasoningOptions(): ReasoningConfig | null {

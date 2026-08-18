@@ -10,6 +10,57 @@
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
 
+/**
+ * A capability a model may have. Traits are authored per model in each
+ * provider's catalogue, so features are gated by asking for a trait instead of
+ * matching model names at the call site.
+ */
+export enum ModelTrait {
+	/** Reasons internally before answering, and can report a thought summary. */
+	Thinking = "thinking",
+
+	/** Can call the function tools we declare. */
+	FunctionCalling = "functionCalling",
+
+	/** Has a provider-side web search or grounding tool. */
+	WebSearch = "webSearch",
+
+	/** Accepts images as input. */
+	ViewImage = "viewImage",
+
+	/** Accepts video as input. */
+	ViewVideo = "viewVideo",
+
+	/** Accepts audio as input. */
+	AnalyzeAudio = "analyzeAudio",
+
+	/** Accepts documents (PDF and friends) as input. */
+	ReadDocument = "readDocument",
+
+	/** Returns generated images. */
+	GenerateImage = "generateImage",
+
+	/** Returns generated speech or audio. */
+	GenerateAudio = "generateAudio",
+
+	/** Returns generated video. */
+	GenerateVideo = "generateVideo"
+}
+
+/** A model offered by a provider, with the capabilities it supports. */
+export interface ModelInfo {
+	/** Wire ID. Also the value stored in config and picked in Discord. */
+	id: string;
+
+	/** Human-friendly label; falls back to the ID when a provider has none. */
+	displayName: string;
+
+	/** Provider that serves this model. */
+	provider: string;
+
+	traits: readonly ModelTrait[];
+}
+
 export type ChatRole = "user" | "developer" | "assistant";
 
 export type MessagePart =
@@ -107,16 +158,17 @@ export interface AIProvider {
 	readonly id: string;
 
 	/** Models offered by this provider, in display order. */
-	readonly models: string[];
+	readonly models: readonly ModelInfo[];
 
-	/** Whether the given model supports reasoning/thinking. */
-	isReasoningModel(model: string): boolean;
+	/**
+	 * Metadata for one of this provider's models. Models missing from the
+	 * catalogue get traits inferred from their name, so a hand-written
+	 * `MODEL_DEFAULT` still behaves sensibly.
+	 */
+	getModelInfo(model: string): ModelInfo;
 
-	/** Whether the given model supports the provider's built-in web search. */
-	supportsWebSearch(model: string): boolean;
-
-	/** Whether the given model supports the provider's built-in image generation. */
-	supportsImageGeneration(model: string): boolean;
+	/** Whether the given model has a capability. */
+	hasTrait(model: string, trait: ModelTrait): boolean;
 
 	/** One-shot, non-streaming completion. */
 	respond(request: ModelRequest): Promise<ModelResponse>;

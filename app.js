@@ -1,9 +1,10 @@
-import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User, PermissionsBitField, ChannelType } from "discord.js";
+import { Events, REST, Routes, EmbedBuilder, SlashCommandBuilder, Message, DMChannel, Guild, User, PermissionsBitField, ChannelType, ApplicationIntegrationType, InteractionContextType } from "discord.js";
 import { log, interactive } from "./logger.js";
 import { discord, authenticateDiscordClient } from "./clients/discord.js";
 import { bold, code, emoji } from "./format.js";
 import config from "./config/config.js";
 import { ChatConversation } from "./objects/ChatConversation.js";
+import { InteractionMessage } from "./objects/InteractionMessage.js";
 import { getConversation, setConversation } from "./store/conversation.js";
 
 import { models } from "./clients/openai.js";
@@ -128,6 +129,86 @@ function buildCommands() {
 
 	// Convert builders to plain JSON for the REST API
 	return commands.map((c) => c.toJSON());
+}
+
+// Build global commands (JSON) used by the Discord API. These are registered
+// globally so they are available in personal (user-installed) app contexts:
+// bot DMs, group DMs and servers where only the user installed the app.
+function buildGlobalCommands() {
+	const commands = [
+		new SlashCommandBuilder()
+			.setName("b")
+			.setDescription("Hỏi trợ lý AI và nhận phản hồi ngay trong kênh chat hiện tại")
+			.setIntegrationTypes(
+				ApplicationIntegrationType.GuildInstall,
+				ApplicationIntegrationType.UserInstall
+			)
+			.setContexts(
+				InteractionContextType.Guild,
+				InteractionContextType.BotDM,
+				InteractionContextType.PrivateChannel
+			)
+			.addStringOption((option) => {
+				return option.setName("message")
+					.setDescription("Nội dung tin nhắn gửi tới trợ lý")
+					.setRequired(true);
+			})
+			.addStringOption((option) => {
+				return option.setName("model")
+					.setDescription("Model sẽ sử dụng cho lượt hỏi này (mặc định dùng model của kênh)")
+					.setRequired(false)
+					.addChoices(...models.map((i) => ({ name: i, value: i })));
+			})
+			.addStringOption((option) => {
+				return option.setName("thinking")
+					.setDescription("Mức độ suy luận cho các model hỗ trợ reasoning")
+					.setRequired(false)
+					.addChoices(
+						{ name: "Tối thiểu", value: "minimal" },
+						{ name: "Thấp", value: "low" },
+						{ name: "Trung bình", value: "medium" },
+						{ name: "Cao", value: "high" }
+					);
+			}),
+
+		// DM/private-context version of /clear. Guilds already get a
+		// guild-scoped /clear, so this one is limited to private contexts
+		// to avoid showing a duplicated command in servers.
+		new SlashCommandBuilder()
+			.setName("clear")
+			.setDescription("Xóa toàn bộ context tin nhắn trong cuộc trò chuyện hiện tại")
+			.setIntegrationTypes(
+				ApplicationIntegrationType.GuildInstall,
+				ApplicationIntegrationType.UserInstall
+			)
+			.setContexts(
+				InteractionContextType.BotDM,
+				InteractionContextType.PrivateChannel
+			),
+	];
+
+	return commands.map((c) => c.toJSON());
+}
+
+// Register global commands (available in personal app contexts).
+async function registerGlobalCommands() {
+	const log = interactive("commands");
+	const commandsJSON = buildGlobalCommands();
+
+	try {
+		log.await(`Bắt đầu đăng ký ${commandsJSON.length} câu lệnh toàn cục.`);
+
+		const data = await rest.put(
+			Routes.applicationCommands(APP_ID),
+			{ body: commandsJSON }
+		);
+
+		log.success(`Đã đăng ký thành công ${data.length} câu lệnh toàn cục.`);
+		return data;
+	} catch (error) {
+		log.error(error);
+		throw error;
+	}
 }
 
 // Register commands to a specific guild (fast propagation)
@@ -330,6 +411,68 @@ function resolveConversation(channel, { modeOverride } = {}) {
 	return conversation;
 }
 
+/**
+ * Resolve (or create) an assistant-mode conversation for a slash command
+ * interaction. Used by the personal-app `/b` command, which may run in
+ * channels the bot cannot access directly (bot DMs, group DMs, servers where
+ * only the user installed the app), so a lightweight channel facade is used
+ * when the real channel object is unavailable.
+ */
+function resolveAssistantConversation(interaction, { model = null, thinking = null } = {}) {
+	const channelId = interaction.channelId;
+
+	// Share the channel's conversation (and history) only when that channel
+	// already behaves as an assistant channel (DMs, or /mode assistant).
+	// Otherwise keep /b history under a dedicated key so a chat-mode guild
+	// channel is neither clobbered nor switched into assistant mode.
+	const expectedMode = config.get(`mode.${channelId}`, interaction.guild ? "chat" : "assistant");
+	let key = (expectedMode === "assistant") ? channelId : `b:${channelId}`;
+	let conversation = getConversation(key);
+
+	if (conversation && conversation.mode !== "assistant") {
+		key = `b:${channelId}`;
+		conversation = getConversation(key);
+	}
+
+	if (conversation) {
+		if (model)
+			conversation.model = model;
+
+		if (thinking)
+			conversation.reasoningEffort = thinking;
+
+		return conversation;
+	}
+
+	const channel = interaction.channel || {
+		id: channelId,
+		name: `${interaction.user.displayName}'s chat`,
+		guild: interaction.guild || null
+	};
+
+	const conversationModel = model || config.get(`model.${channelId}`, MODEL_DEFAULT);
+	const reasoningEffort = thinking || config.get(`reasoning.${channelId}`, "medium") || "medium";
+
+	let instructions;
+	if (interaction.guild && typeof SYSTEM_ROLE_SERVER_ASSISTANT[interaction.guild.id] !== "undefined") {
+		instructions = SYSTEM_ROLE_SERVER_ASSISTANT[interaction.guild.id];
+	} else {
+		instructions = SYSTEM_ROLE_ASSISTANT;
+	}
+
+	const nicknames = config.get("nicknames", {});
+	conversation = new ChatConversation(channel, conversationModel, instructions, "assistant", {
+		nickname: nicknames[interaction.guild?.id] || NICKNAME_DEFAULT,
+		reasoningEffort
+	});
+
+	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
+	applyMemorySummary(conversation);
+	setConversation(key, conversation);
+
+	return conversation;
+}
+
 function pickWelcomeChannel(guild) {
 	if (!guild)
 		return null;
@@ -346,6 +489,12 @@ function pickWelcomeChannel(guild) {
 
 discord.on(Events.ClientReady, async () => {
 	log.success(`Đã đăng nhập dưới tài khoản ${discord.user.tag}!`);
+
+	try {
+		await registerGlobalCommands();
+	} catch (err) {
+		log.error(`Không thể đăng ký global commands khi khởi động: ${err.message}`);
+	}
 
 	try {
 		await syncCommandsToAllGuilds();
@@ -424,12 +573,28 @@ discord.on(Events.InteractionCreate, async (interaction) => {
 	try {
 		switch (interaction.commandName) {
 			case "clear": {
-				const count = getConversation(interaction.channelId)?.history.length || 0;
-				setConversation(interaction.channelId, null);
+				let count = 0;
+
+				for (const key of [interaction.channelId, `b:${interaction.channelId}`]) {
+					count += getConversation(key)?.history.length || 0;
+					setConversation(key, null);
+				}
 
 				await interaction.reply({
 					content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`
 				});
+
+				break;
+			}
+
+			case "b": {
+				const prompt = interaction.options.getString("message", true);
+				const model = interaction.options.getString("model") || null;
+				const thinking = interaction.options.getString("thinking") || null;
+
+				const conversation = resolveAssistantConversation(interaction, { model, thinking });
+				const message = new InteractionMessage(interaction, prompt);
+				await conversation.handle(message);
 
 				break;
 			}
@@ -660,8 +825,12 @@ discord.on(Events.MessageCreate, async (message) => {
 		return;
 
 	if (message.content.startsWith("*clear") || message.content.startsWith("/clear")) {
-		const count = getConversation(message.channelId)?.history.length || 0;
-		setConversation(message.channelId, null);
+		let count = 0;
+
+		for (const key of [message.channelId, `b:${message.channelId}`]) {
+			count += getConversation(key)?.history.length || 0;
+			setConversation(key, null);
+		}
 
 		await message.reply({
 			content: `${emoji("acinfo")} ${count} chat context ở trong kênh này đã được loại bỏ!`

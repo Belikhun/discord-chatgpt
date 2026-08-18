@@ -9,9 +9,10 @@ A very simple discord bot that reply to user's message, with long response suppo
 1. Clone this repository
 2. Copy `env.example.json` file to `env.json`
 3. Fill in your OpenAI API key and Discord token
-4. Install requirements by running `npm i`
-5. Start the app by running `npm start`
-6. Profit!
+4. Install [Bun](https://bun.sh) if you don't have it yet
+5. Install requirements by running `bun install`
+6. Start the app by running `bun start`
+7. Profit!
 
 ## 👤 Personal app (user install)
 

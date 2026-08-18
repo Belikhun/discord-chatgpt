@@ -5,17 +5,14 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"type": "node",
+			"type": "bun",
 			"request": "launch",
 			"name": "Start",
-			"skipFiles": [
-				"<node_internals>/**"
-			],
-			"program": "${workspaceFolder}\\app.js",
-			"args": [
-				"--harmony"
-			],
-			"outputCapture": "std",
+			"program": "${workspaceFolder}/src/index.ts",
+			"cwd": "${workspaceFolder}",
+			"stopOnEntry": false,
+			"watchMode": false,
+			"internalConsoleOptions": "neverOpen",
 			"console": "integratedTerminal"
 		}
 	]

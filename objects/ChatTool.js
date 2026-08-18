@@ -7,6 +7,7 @@ import { listConversations as listStoredConversations } from "../store/conversat
 import { listMemoriesForGuild, createMemoryForGuild } from "../store/memory.js";
 import { clearUserWarnings, getModerationProfile, recordModerationAction, listGuildModerationProfiles, getModerationHistory, WARNING_EXPIRATION_MS, WARNING_THRESHOLD_FOR_KICK } from "../store/moderation.js";
 import { searchWiki, searchWikiContent, readWikiContent } from "../store/minecraftWiki.js";
+import { fetchWebpage } from "../store/webpage.js";
 
 export class ChatTool {
 	static log = scope("chat-tool");
@@ -362,6 +363,31 @@ export class ChatTool {
 			},
 			{
 				type: "function",
+				name: "fetch_webpage",
+				description: "Fetch a webpage by URL and return its content converted to compact, AI-friendly markdown. Long documents are returned in chunks: when the result is truncated, call again with startIndex set to the previous result's endIndex to continue reading.",
+				strict: true,
+				parameters: {
+					type: "object",
+					properties: {
+						url: {
+							type: "string",
+							description: "Absolute http(s) URL of the webpage to fetch."
+						},
+						maxLength: {
+							type: ["number", "null"],
+							description: "Maximum number of markdown characters to return per call (default 8000, max 20000)."
+						},
+						startIndex: {
+							type: ["number", "null"],
+							description: "Character offset to start reading from, used to page through long documents. If null, start from the beginning."
+						}
+					},
+					required: ["url", "maxLength", "startIndex"],
+					additionalProperties: false
+				}
+			},
+			{
+				type: "function",
 				name: "minecraft_wiki_search",
 				description: "Search the Minecraft Wiki for pages matching a query.",
 				strict: true,
@@ -525,6 +551,9 @@ export class ChatTool {
 
 				case "fetch_recent_messages":
 					return this.wrapToolOutput(call_id, await this.fetchRecentMessages(args, context));
+
+				case "fetch_webpage":
+					return this.wrapToolOutput(call_id, await this.fetchWebpage(args));
 
 				case "search_messages":
 					return this.wrapToolOutput(call_id, await this.searchMessages(args, context));
@@ -2112,25 +2141,9 @@ export class ChatTool {
 		}
 	}
 
-	static async minecraftWikiSearch({ query, limit }) {
+	static async fetchWebpage({ url, maxLength, startIndex }) {
 		try {
-			return await searchWiki(query, { limit });
-		} catch (err) {
-			return { ok: false, error: err?.message || String(err) };
-		}
-	}
-
-	static async minecraftWikiSearchContent({ pageId, title, query, limit }) {
-		try {
-			return await searchWikiContent({ pageId, title, query, limit });
-		} catch (err) {
-			return { ok: false, error: err?.message || String(err) };
-		}
-	}
-
-	static async minecraftWikiReadContent({ pageId, title, startLine, endLine }) {
-		try {
-			return await readWikiContent({ pageId, title, startLine, endLine });
+			return await fetchWebpage(url, { maxLength, startIndex });
 		} catch (err) {
 			return { ok: false, error: err?.message || String(err) };
 		}

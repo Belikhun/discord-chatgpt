@@ -14,7 +14,9 @@
     "discord.js": "^14.25.1",
     "dotenv": "^16.6.1",
     "openai": "^4.104.0",
-    "signale": "^1.4.0"
+    "signale": "^1.4.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "config": {
     "signale": {

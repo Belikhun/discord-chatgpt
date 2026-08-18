@@ -53,7 +53,7 @@ export class ChatConversation {
 		this.instructions += "\n" + lines(
 			"All messages come as structured JSON objects representing Discord messages.",
 			"Interpret them as chat input — respond naturally in plain text following Discord conventions.",
-			"Use available tools when you need more surrounding context (recent messages, server info, emojis, or memory).",
+			"Use available tools when you need more surrounding context (recent messages, server info, emojis, or memory), or to read webpage content when a message references a URL (fetch_webpage returns the page as markdown).",
 			"",
 			"Schema:",
 			'{ "currentChannel": { "id": string, "name": string },',

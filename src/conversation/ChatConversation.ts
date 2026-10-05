@@ -46,6 +46,9 @@ export class ChatConversation {
 	processing: boolean;
 	forceRespondOnNextProcess: boolean;
 
+	/** The queued turn was asked for by name (mention or wake keyword), not picked up from the flow. */
+	explicitTrigger: boolean;
+
 	history: HistoryEntry[];
 
 	/** Key this conversation is stored under: the channel id, or `b:<channel>` for /b. */
@@ -79,9 +82,10 @@ export class ChatConversation {
 		this.lastMessage = null;
 
 		// Resolve the bot's display name for this guild (nickname if set, otherwise username).
-		const botName = (channel.guild)
-			? (channel.guild.members.cache.get(discord.user!.id)?.displayName || discord.user?.username || "")
-			: (discord.user?.username || "");
+		const botName = channel.botName
+			|| ((channel.guild)
+				? (channel.guild.members.cache.get(discord.user!.id)?.displayName || discord.user?.username || "")
+				: (discord.user?.username || ""));
 
 		this.instructions = instructions.replaceAll("{@}", discord.user?.username || "");
 		this.instructions = this.instructions.replaceAll("{NAME}", botName);
@@ -95,8 +99,18 @@ export class ChatConversation {
 		this.pendingProcess = false;
 		this.processing = false;
 		this.forceRespondOnNextProcess = false;
+		this.explicitTrigger = false;
 
-		this.instructions += "\n" + lines(
+		this.instructions += "\n" + (channel.surfaceInstructions ?? ChatConversation.discordInstructions());
+
+		this.history = [];
+
+		this.log.info(`New conversation created in ${this.mode} mode, using model ${this.model}`);
+	}
+
+	/** The message schema and formatting rules of a Discord channel. */
+	static discordInstructions(): string {
+		return lines(
 			"All messages come as structured JSON objects representing Discord messages.",
 			"Interpret them as chat input — respond naturally in plain text following Discord conventions.",
 			"Use available tools when you need more surrounding context (recent messages, server info, emojis, or memory), or to read webpage content when a message references a URL (fetch_webpage returns the page as markdown).",
@@ -127,10 +141,10 @@ export class ChatConversation {
 			"",
 			"Custom server emojis are available; call list_emojis to see their names before using one."
 		);
+	}
 
-		this.history = [];
-
-		this.log.info(`New conversation created in ${this.mode} mode, using model ${this.model}`);
+	get platform() {
+		return this.channel.platform ?? "discord";
 	}
 
 	get provider() {
@@ -331,7 +345,7 @@ export class ChatConversation {
 			this.conversationWakeupKeywords,
 			(keyword) => message.content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase())
 		);
-		const botMentioned = message.mentions.users.has(discord.user!.id);
+		const botMentioned = message.mentionsBot ?? message.mentions.users.has(discord.user!.id);
 
 		const skipThreshold = (this.skipStreak <= 1) ? 1 : 4;
 		const shouldProcess = (this.chatActivated)
@@ -349,6 +363,7 @@ export class ChatConversation {
 
 		this.skippedMessages = 0;
 		this.pendingProcess = true;
+		this.explicitTrigger = this.explicitTrigger || botMentioned || wakeupKeywordMatched;
 		if (botMentioned || wakeupKeywordMatched) {
 			if (message.channel?.sendTyping) {
 				message.channel.sendTyping().catch((err: any) => {
@@ -434,8 +449,31 @@ export class ChatConversation {
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
 		const forceRespond = this.forceRespondOnNextProcess;
 		this.forceRespondOnNextProcess = false;
+		const explicit = this.explicitTrigger;
+		this.explicitTrigger = false;
+		const progress = this.channel.progress;
+
+		progress?.start(explicit);
+
+		let sent = false;
+
+		try {
+			sent = await this.produceReply({ activateChat, forceRespond }) !== null;
+			return sent ? this.lastReplyText : null;
+		} finally {
+			progress?.end(sent);
+		}
+	}
+
+	/** Text of the last reply that went out, for `generateReply`'s return. */
+	private lastReplyText: string | null = null;
+
+	private async produceReply({ activateChat, forceRespond }: { activateChat: boolean; forceRespond: boolean }): Promise<string | null> {
+		this.lastReplyText = null;
+
 		const request = await this.buildResponseRequest(this.lastMessage, { forceRespond });
 		const provider = this.provider;
+		const progress = this.channel.progress;
 
 		const { response } = await runToolLoop({
 			request: {
@@ -448,7 +486,9 @@ export class ChatConversation {
 			context: request.context,
 			maxPasses: CHAT_MAX_PASSES,
 			call: (modelRequest) => provider.respond(modelRequest),
-			onItems: (items) => this.pushHistory(...items)
+			onItems: (items) => this.pushHistory(...items),
+			onToolCalls: (calls) => progress?.tools(calls),
+			onToolResults: (calls, outputs) => progress?.toolsDone(calls, outputs)
 		});
 
 		let output_text = response?.outputText ?? "";
@@ -469,7 +509,7 @@ export class ChatConversation {
 		this.skipStreak = 0;
 
 		const canSend = () => {
-			if (this.channel instanceof DMChannel)
+			if (this.platform !== "discord" || this.channel instanceof DMChannel)
 				return true;
 
 			const perms = this.channel.permissionsFor?.(discord.user);
@@ -481,17 +521,23 @@ export class ChatConversation {
 			return null;
 		}
 
-		output_text = this.processOutputEmojis(output_text);
-
 		try {
-			for (const chunk of splitMessage(output_text))
-				await this.channel.send!({ content: chunk });
+			if (this.platform === "discord") {
+				output_text = this.processOutputEmojis(output_text);
+
+				for (const chunk of splitMessage(output_text))
+					await this.channel.send!({ content: chunk });
+			} else {
+				// The surface splits and formats its own lines.
+				await this.channel.send!({ content: output_text });
+			}
 		} catch (err: any) {
 			this.log.error(`Failed to send message to channel ${this.channel.id}: ${err.message}`);
 			return null;
 		}
 
 		this.log.info(`Response sent to channel ${this.channel.id}.`);
+		this.lastReplyText = output_text;
 		return output_text;
 	}
 
@@ -525,6 +571,9 @@ export class ChatConversation {
 	 * with explicit tags to help the AI better understand who is referenced.
 	 */
 	async processMessage(message: IncomingMessage): Promise<string> {
+		if (message.describe)
+			return JSON.stringify(message.describe());
+
 		let { author, content, mentions } = message;
 		const displayName = this.resolveDisplayName(author, message.member);
 

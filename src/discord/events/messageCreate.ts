@@ -6,6 +6,7 @@ import { isChannelBlacklisted } from "../blacklist";
 import { buildErrorEmbed } from "../errorEmbed";
 import { getConversation, setConversation } from "../../conversation/store";
 import { resolveConversation } from "../../conversation/resolve";
+import { isBridgedDiscordChannel } from "../../minecraft";
 
 export async function handleMessageCreate(message: Message): Promise<void> {
 	// if (message.author.bot)
@@ -14,6 +15,11 @@ export async function handleMessageCreate(message: Message): Promise<void> {
 		return;
 
 	if (message.guild && isChannelBlacklisted(message.channelId))
+		return;
+
+	// luna-messenger relays this channel into Minecraft chat, where the bot
+	// already hears it; answering here as well would loop through the game.
+	if (isBridgedDiscordChannel(message.channelId))
 		return;
 
 	if (!message.content && !message.attachments.size && !message.components.length)

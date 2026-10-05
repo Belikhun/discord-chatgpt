@@ -70,6 +70,12 @@ export interface Env {
 
 	/** MCP servers the bot can use; see `src/mcp/config.ts`. */
 	MCP_SERVERS?: Record<string, import("./mcp/config").McpServerConfig>;
+
+	/** Minecraft network chat through luna-messenger's bridge; see `src/minecraft/config.ts`. */
+	MINECRAFT_BRIDGE?: import("./minecraft/config").MinecraftBridgeConfig;
+
+	/** The web_search tool's backend; see `src/stores/websearch.ts`. */
+	WEB_SEARCH?: import("./stores/websearch").WebSearchConfig;
 }
 
 function loadEnv(): Env {

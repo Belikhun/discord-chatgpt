@@ -20,7 +20,7 @@ export function memoryViewer(context: ToolContext): MemoryViewer {
 	const channel = context?.conversation?.channel;
 
 	return {
-		guildId: channel?.guild?.id ?? null,
+		guildId: channel?.guild?.id ?? channel?.memoryGuildId ?? null,
 		channelId: channel?.id ?? null,
 		userId: context?.message?.author?.id ?? null
 	};

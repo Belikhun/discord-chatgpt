@@ -1,176 +1,171 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { Readability } from "@mozilla/readability";
+import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 // @ts-expect-error turndown-plugin-gfm ships no type definitions
 import turndownPluginGfm from "turndown-plugin-gfm";
 import { scope } from "../logger";
+import { cleanUrl } from "./websearch";
 
 const log = scope("webpage");
 
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 50;
 const DEFAULT_CHUNK_LENGTH = 8000;
 const MAX_CHUNK_LENGTH = 20000;
+const MAX_OUTLINE = 40;
+
+/** Below this much text, a Readability extract is a fragment, not the article. */
+const MIN_ARTICLE_CHARS = 500;
+
+/** ...unless it is still this share of everything readable on the page. */
+const MIN_ARTICLE_SHARE = 0.3;
+
+const USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 discord-chatgpt";
+
+export type ReadMode = "article" | "full";
+
+export interface ReadOptions {
+	maxLength?: number | null;
+	startIndex?: number | null;
+	/** `article` (default): the main content only. `full`: the whole page, minus chrome and junk. */
+	mode?: ReadMode | null;
+	/** Keep link targets (default true). Off turns links into their text. */
+	links?: boolean | null;
+	/** Keep images as markdown (default false). Off keeps nothing of them. */
+	images?: boolean | null;
+}
 
 interface WebDocument {
 	finalUrl: string;
-	title: string | null;
 	contentType: string;
+	title: string | null;
+	description: string | null;
+	siteName: string | null;
+	byline: string | null;
+	published: string | null;
+	lang: string | null;
+	mode: ReadMode;
 	markdown: string;
+	sourceChars: number;
 	fetchedAt: number;
 }
 
-const cache = new Map<string, { fetchedAt: number; document: WebDocument }>();
+const cache = new Map<string, WebDocument>();
 
-const STRIP_TAGS = [
-	"script", "style", "noscript", "svg", "iframe", "canvas",
-	"template", "video", "audio", "object", "embed", "form",
-	"select", "dialog", "nav", "footer", "aside", "header"
-];
+/** Elements that never carry readable content. */
+const STRIP_SELECTOR = [
+	"script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed",
+	"video", "audio", "picture source", "map", "dialog", "button", "input", "select", "textarea",
+	"[hidden]", "[aria-hidden=true]", "[role=dialog]", "[role=alertdialog]", "link", "meta",
+	// text meant for screen readers only ("Section titled …", "Skip to content")
+	".sr-only", ".visually-hidden", ".screen-reader-text", ".a11y-hidden",
+	// citation markers, edit links and navigation boxes (MediaWiki, and the many sites built like it)
+	"sup.reference", ".mw-editsection", ".navbox", ".mw-jump-link", ".catlinks", ".noprint", ".printfooter"
+].join(",");
 
-function isPrivateHost(hostname: string): boolean {
-	const host = (hostname || "").toLowerCase();
+/** Page chrome, removed in `full` mode (Readability drops it by itself in `article` mode). */
+const CHROME_SELECTOR = "nav, footer, aside, [role=navigation], [role=banner], [role=contentinfo], [role=complementary]";
 
-	if (["localhost", "0.0.0.0", "::1", "[::1]"].includes(host))
+/** Class or id words that mark cookie walls, ads, share bars and other noise. */
+const JUNK_PATTERN = /(^|[-_\s])(cookies?|consent|gdpr|banner|newsletter|subscribe|subscription|advert|advertisement|ads?|sponsor(ed)?|promo|popup|modal|overlay|share|sharing|social|related|recommend(ed|ations)?|breadcrumbs?|sidebar|toolbar|skip-?link|paywall|signup|login|outbrain|taboola)($|[-_\s])/i;
+
+//* ===========================================================
+//*  Address safety
+//* -----------------------------------------------------------
+//*  Every hop is resolved and refused on a loopback, private,
+//*  link-local or otherwise internal address, so neither a
+//*  hostname nor a redirect reaches the bot's own network.
+//* ===========================================================
+
+function blockedV4(address: string): boolean {
+	const [a = 0, b = 0, c = 0] = address.split(".").map(Number);
+
+	return a === 0
+		|| a === 10
+		|| a === 127
+		|| (a === 100 && b >= 64 && b <= 127)
+		|| (a === 169 && b === 254)
+		|| (a === 172 && b >= 16 && b <= 31)
+		|| (a === 192 && b === 0 && c === 0)
+		|| (a === 192 && b === 168)
+		|| (a === 198 && (b === 18 || b === 19))
+		|| a >= 224;
+}
+
+/** Whether an address is one the bot must never fetch from (loopback, private, link-local, ...). */
+export function blockedAddress(address: string): boolean {
+	const version = isIP(address);
+
+	if (version === 4)
+		return blockedV4(address);
+
+	if (version !== 6)
 		return true;
 
-	// Block IPv6 literals and single-label / internal hostnames entirely.
-	if (host.startsWith("[") || !host.includes("."))
-		return true;
+	const lower = address.toLowerCase();
+	const mapped = lower.match(/^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/);
 
-	if (host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".lan"))
-		return true;
+	if (mapped)
+		return blockedV4(mapped[1]!);
 
-	const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-	if (ipv4) {
-		const a = Number(ipv4[1]);
-		const b = Number(ipv4[2]);
+	return lower === "::"
+		|| lower === "::1"
+		|| /^f[cd]/.test(lower)
+		|| /^fe[89ab]/.test(lower)
+		|| lower.startsWith("ff");
+}
 
-		if (a === 0 || a === 10 || a === 127)
-			return true;
-		if (a === 169 && b === 254)
-			return true;
-		if (a === 172 && b >= 16 && b <= 31)
-			return true;
-		if (a === 192 && b === 168)
-			return true;
+async function assertPublicHost(hostname: string): Promise<void> {
+	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+	if (host === "localhost" || /\.(localhost|local|internal|lan|home|corp)$/.test(host))
+		throw new Error("Refusing to fetch private, local or internal addresses.");
+
+	const addresses = isIP(host)
+		? [host]
+		: (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+
+	if (addresses.length === 0 || addresses.some(blockedAddress))
+		throw new Error("Refusing to fetch private, local or internal addresses.");
+}
+
+async function fetchPublic(url: URL): Promise<Response> {
+	let current = url;
+
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		if (!["http:", "https:"].includes(current.protocol))
+			throw new Error("Only http and https URLs are supported.");
+
+		await assertPublicHost(current.hostname);
+
+		const response = await fetch(current, {
+			redirect: "manual",
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			headers: {
+				"user-agent": USER_AGENT,
+				"accept": "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",
+				"accept-language": "en,vi;q=0.8"
+			}
+		});
+
+		const location = response.headers.get("location");
+
+		if (response.status >= 300 && response.status < 400 && location) {
+			(response.body as any)?.cancel?.().catch(() => {});
+			current = new URL(location, current);
+			continue;
+		}
+
+		Object.defineProperty(response, "finalUrl", { value: current.toString() });
+		return response;
 	}
 
-	return false;
-}
-
-function decodeEntities(text: string): string {
-	return String(text || "")
-		.replace(/&#(\d+);/g, (m, code) => String.fromCodePoint(Number(code)))
-		.replace(/&#x([0-9a-f]+);/gi, (m, code) => String.fromCodePoint(parseInt(code, 16)))
-		.replaceAll("&amp;", "&")
-		.replaceAll("&lt;", "<")
-		.replaceAll("&gt;", ">")
-		.replaceAll("&quot;", "\"")
-		.replaceAll("&apos;", "'")
-		.replaceAll("&nbsp;", " ");
-}
-
-function extractTitle(html: string): string | null {
-	const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-	if (!match)
-		return null;
-
-	const title = decodeEntities(match[1] as string).replace(/\s+/g, " ").trim();
-	return title || null;
-}
-
-/**
- * Reduce a raw HTML document to its main content before markdown
- * conversion: strip non-content tags and prefer <main>/<article>/<body>.
- */
-function cleanHtml(html: string): string {
-	let output = html.replace(/<!--[\s\S]*?-->/g, "");
-
-	// Prefer the primary content container when the page declares one.
-	const main = output.match(/<main[\s>][\s\S]*<\/main>/i)
-		|| output.match(/<article[\s>][\s\S]*<\/article>/i)
-		|| output.match(/<body[\s>][\s\S]*<\/body>/i);
-
-	if (main)
-		output = main[0];
-
-	for (const tag of STRIP_TAGS)
-		output = output.replace(new RegExp(`<${tag}(\\s[^>]*)?>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
-
-	return output;
-}
-
-/**
- * Convert cleaned HTML into compact, AI-friendly markdown. Links and images
- * are rewritten to absolute URLs; data-URI images are dropped.
- */
-function convertHtmlToMarkdown(html: string, baseUrl: string): string {
-	const absolute = (href: string) => {
-		try {
-			return new URL(href, baseUrl).toString();
-		} catch {
-			return href;
-		}
-	};
-
-	const turndown = new TurndownService({
-		headingStyle: "atx",
-		codeBlockStyle: "fenced",
-		bulletListMarker: "-",
-		hr: "---",
-		emDelimiter: "*",
-
-		// Nodes turndown would keep as raw HTML (e.g. complex/nested tables
-		// from the gfm plugin) are flattened to their plain text instead, so
-		// no raw markup leaks into the markdown output.
-		keepReplacement: (content: string, node: any) => {
-			const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-			return text ? ` ${text} ` : "";
-		}
-	});
-
-	turndown.use(turndownPluginGfm.gfm);
-	turndown.remove(["script", "style", "noscript", "title", "select", "option", "button"]);
-
-	turndown.addRule("dropHiddenElements", {
-		filter: (node: any) => /display\s*:\s*none/i.test(node.getAttribute?.("style") || ""),
-		replacement: () => ""
-	});
-
-	turndown.addRule("compactImages", {
-		filter: "img",
-		replacement: (content: string, node: any) => {
-			const alt = (node.getAttribute("alt") || "").trim();
-			const src = node.getAttribute("src") || "";
-
-			if (!src || src.startsWith("data:"))
-				return alt ? `[image: ${alt}]` : "";
-
-			return `![${alt}](${absolute(src)})`;
-		}
-	});
-
-	turndown.addRule("absoluteLinks", {
-		filter: (node: any) => node.nodeName === "A" && node.getAttribute("href"),
-		replacement: (content: string, node: any) => {
-			const href = node.getAttribute("href") || "";
-			const text = content.trim();
-
-			if (!text)
-				return "";
-
-			if (href.startsWith("#") || href.startsWith("javascript:"))
-				return text;
-
-			return `[${text}](${absolute(href)})`;
-		}
-	});
-
-	return turndown.turndown(html)
-		.replace(/[ \t]+$/gm, "")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
+	throw new Error(`Gave up after ${MAX_REDIRECTS} redirects.`);
 }
 
 async function readBodyWithLimit(response: Response): Promise<string> {
@@ -208,29 +203,287 @@ async function readBodyWithLimit(response: Response): Promise<string> {
 	return text + decoder.decode();
 }
 
-async function loadDocument(url: string): Promise<WebDocument> {
-	log.debug(`Fetching webpage: ${url}`);
-	const response = await fetch(url, {
-		redirect: "follow",
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-		headers: {
-			"user-agent": "Mozilla/5.0 (compatible; discord-chatgpt/1.0; +https://github.com/Belikhun/discord-chatgpt)",
-			"accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-			"accept-language": "en,vi;q=0.8"
+//* ===========================================================
+//*  HTML → markdown
+//* -----------------------------------------------------------
+//*  The page is parsed into a real DOM, its noise removed, the
+//*  main content picked by Readability, and only then turned
+//*  into markdown, so what the model pays for is the text.
+//* ===========================================================
+
+function meta(document: any, ...names: string[]): string | null {
+	for (const name of names) {
+		const element = document.querySelector(`meta[property="${name}"], meta[name="${name}"]`);
+		const value = element?.getAttribute("content")?.trim();
+
+		if (value)
+			return value.replace(/\s+/g, " ");
+	}
+
+	return null;
+}
+
+function textLength(node: any): number {
+	return (node?.textContent || "").replace(/\s+/g, " ").trim().length;
+}
+
+function removeNoise(root: any, { chrome }: { chrome: boolean }): void {
+	for (const element of [...root.querySelectorAll(STRIP_SELECTOR)])
+		element.remove();
+
+	for (const element of [...root.querySelectorAll("[style]")]) {
+		if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(element.getAttribute("style") || ""))
+			element.remove();
+	}
+
+	if (!chrome)
+		return;
+
+	for (const element of [...root.querySelectorAll(CHROME_SELECTOR)])
+		element.remove();
+
+	const total = Math.max(1, textLength(root));
+
+	for (const element of [...root.querySelectorAll("[class], [id]")]) {
+		if (!element.isConnected)
+			continue;
+
+		const marker = `${element.getAttribute("class") || ""} ${element.getAttribute("id") || ""}`;
+		if (!JUNK_PATTERN.test(marker))
+			continue;
+
+		// A wrapper named after one of these words can hold the whole page
+		// (`<body class="has-sidebar">`); only drop what is clearly a part.
+		if (element.querySelector("main, article, [role=main]") || textLength(element) > total * 0.5)
+			continue;
+
+		element.remove();
+	}
+}
+
+function markdownConverter(baseUrl: string, { links, images }: { links: boolean; images: boolean }): TurndownService {
+	let pageHost = "";
+
+	try {
+		pageHost = new URL(baseUrl).host;
+	} catch {
+		// an unparseable base only costs the shortening below
+	}
+
+	const absolute = (href: string) => {
+		try {
+			return cleanUrl(new URL(href, baseUrl).toString());
+		} catch {
+			return href;
+		}
+	};
+
+	// A link within the same site is written as its path: the page's own URL
+	// is in the result, and the host repeated on every link is pure cost.
+	const compact = (href: string) => {
+		const target = absolute(href);
+
+		try {
+			const url = new URL(target);
+			return url.host === pageHost ? `${url.pathname}${url.search}` : target;
+		} catch {
+			return target;
+		}
+	};
+
+	const turndown = new TurndownService({
+		headingStyle: "atx",
+		codeBlockStyle: "fenced",
+		bulletListMarker: "-",
+		hr: "---",
+		emDelimiter: "*",
+
+		// Nodes turndown would keep as raw HTML (complex tables, mostly) are
+		// flattened to their text, so no markup reaches the model.
+		keepReplacement: (content: string, node: any) => {
+			const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+			return text ? ` ${text} ` : "";
 		}
 	});
 
-	const finalUrl = response.url || url;
+	turndown.use(turndownPluginGfm.gfm);
+	turndown.remove(["script", "style", "noscript", "title", "select", "option", "button", "form"] as any);
 
-	try {
-		if (isPrivateHost(new URL(finalUrl).hostname))
-			throw new Error("Refusing to follow redirect to a private or local address.");
-	} catch (err) {
-		if (err instanceof TypeError)
-			throw new Error("Failed to parse the final URL after redirects.");
+	turndown.addRule("images", {
+		filter: "img",
+		replacement: (content: string, node: any) => {
+			if (!images)
+				return "";
 
-		throw err;
+			const alt = (node.getAttribute("alt") || "").trim();
+			const src = node.getAttribute("src") || "";
+
+			if (!src || src.startsWith("data:"))
+				return "";
+
+			return `![${alt}](${absolute(src)})`;
+		}
+	});
+
+	turndown.addRule("links", {
+		filter: (node: any) => node.nodeName === "A",
+		replacement: (content: string, node: any) => {
+			const text = content.replace(/\s+/g, " ").trim();
+			const href = node.getAttribute("href") || "";
+
+			if (!text)
+				return "";
+
+			if (!links || !href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:"))
+				return text;
+
+			const target = compact(href);
+			const full = absolute(href);
+			const bare = text === full || (/^https?:/i.test(href) && text === href);
+
+			return bare ? `<${full}>` : `[${text}](${target})`;
+		}
+	});
+
+	return turndown;
+}
+
+/**
+ * Tables used for layout (no header cell anywhere, or one nested in another)
+ * are not data: markdown cannot hold them, and flattened whole they run every
+ * cell into one line. Turned into plain blocks they read row by row.
+ */
+function unwrapLayoutTables(html: string): string {
+	const { document } = parseHTML(`<!doctype html><html><body>${html}</body></html>`);
+	const tables = [...document.querySelectorAll("table")].reverse();
+	let changed = false;
+
+	for (const table of tables) {
+		const layout = !table.querySelector("th")
+			|| Boolean(table.querySelector("table"))
+			|| table.getAttribute("role") === "presentation";
+
+		if (!layout)
+			continue;
+
+		for (const cell of [...table.querySelectorAll("td, th")]) {
+			const span = document.createElement("span");
+			span.innerHTML = `${cell.innerHTML} `;
+			cell.replaceWith(span);
+		}
+
+		for (const block of [...table.querySelectorAll("tr, tbody, thead, tfoot, caption")]) {
+			const div = document.createElement("div");
+			div.innerHTML = block.innerHTML;
+			block.replaceWith(div);
+		}
+
+		const wrapper = document.createElement("div");
+		wrapper.innerHTML = table.innerHTML;
+		table.replaceWith(wrapper);
+		changed = true;
 	}
+
+	return changed ? document.body.innerHTML : html;
+}
+
+/** Tidy converted markdown: no trailing spaces, no empty link or list lines, no repeated lines, no blank runs. */
+function tidy(markdown: string): string {
+	const output: string[] = [];
+	let fenced = false;
+
+	for (const raw of markdown.split("\n")) {
+		const line = raw.replace(/[ \t]+$/, "");
+
+		if (line.startsWith("```"))
+			fenced = !fenced;
+
+		if (!fenced) {
+			if (/^\s*([-*+]|\d+\.)\s*$/.test(line) || /^\s*\[\]\([^)]*\)\s*$/.test(line))
+				continue;
+
+			if (line.trim() && output.length > 0 && output[output.length - 1] === line)
+				continue;
+		}
+
+		output.push(line);
+	}
+
+	return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** HTML to compact markdown plus page metadata; exported for tests. */
+export function convertHtml(html: string, baseUrl: string, options: { mode: ReadMode; links: boolean; images: boolean }) {
+	const { document } = parseHTML(html);
+	const turndown = markdownConverter(baseUrl, options);
+
+	const metadata = {
+		title: meta(document, "og:title", "twitter:title") || (document.querySelector("title")?.textContent || "").replace(/\s+/g, " ").trim() || null,
+		description: meta(document, "description", "og:description", "twitter:description"),
+		siteName: meta(document, "og:site_name", "application-name"),
+		published: meta(document, "article:published_time", "datePublished", "date")
+			|| document.querySelector("time[datetime]")?.getAttribute("datetime")
+			|| null,
+		lang: document.documentElement?.getAttribute("lang") || null,
+		byline: null as string | null
+	};
+
+	removeNoise(document, { chrome: false });
+
+	let mode = options.mode;
+	let body = "";
+
+	if (mode === "article") {
+		// Readability rewrites the document it reads, so it gets its own copy.
+		const { document: copy } = parseHTML(document.toString());
+		const article = new Readability(copy as any, { charThreshold: 200, keepClasses: false }).parse();
+		const pageText = Math.max(1, textLength(document.body));
+		const articleText = (article?.textContent || "").replace(/\s+/g, " ").trim().length;
+
+		if (article?.content && (articleText >= MIN_ARTICLE_CHARS || articleText >= pageText * MIN_ARTICLE_SHARE)) {
+			body = article.content;
+			metadata.byline = article.byline?.trim() || null;
+			metadata.title = metadata.title || article.title || null;
+		} else {
+			mode = "full";
+		}
+	}
+
+	if (mode === "full") {
+		removeNoise(document, { chrome: true });
+		const root = document.querySelector("main, [role=main]") || document.body || document.documentElement;
+		body = root?.innerHTML || html;
+	}
+
+	return { ...metadata, mode, markdown: tidy(turndown.turndown(unwrapLayoutTables(body || ""))) };
+}
+
+/** The document's headings and where each starts, so a long page can be read section by section. */
+function outline(markdown: string): { level: number; title: string; startIndex: number }[] {
+	const headings: { level: number; title: string; startIndex: number }[] = [];
+	let offset = 0;
+	let fenced = false;
+
+	for (const line of markdown.split("\n")) {
+		if (line.startsWith("```"))
+			fenced = !fenced;
+
+		const match = !fenced && line.match(/^(#{1,4})\s+(.+)$/);
+
+		if (match)
+			headings.push({ level: match[1]!.length, title: match[2]!.replace(/[*_`[\]]/g, "").replace(/\(([^)]*)\)/g, "").trim().slice(0, 120), startIndex: offset });
+
+		offset += line.length + 1;
+	}
+
+	return headings.slice(0, MAX_OUTLINE);
+}
+
+async function loadDocument(url: URL, options: { mode: ReadMode; links: boolean; images: boolean }): Promise<WebDocument> {
+	log.debug(`Fetching webpage: ${url}`);
+
+	const response = await fetchPublic(url);
+	const finalUrl: string = (response as any).finalUrl || url.toString();
 
 	if (!response.ok) {
 		(response.body as any)?.cancel?.().catch(() => {});
@@ -239,69 +492,77 @@ async function loadDocument(url: string): Promise<WebDocument> {
 
 	const contentType = (response.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
 	const isHtml = !contentType || contentType.includes("html") || contentType.includes("xhtml");
-	const isText = contentType.startsWith("text/")
-		|| contentType.includes("json")
-		|| contentType.includes("xml")
-		|| contentType.includes("markdown");
+	const isJson = contentType.includes("json");
+	const isText = contentType.startsWith("text/") || isJson || contentType.includes("xml") || contentType.includes("markdown");
 
 	if (!isHtml && !isText) {
 		(response.body as any)?.cancel?.().catch(() => {});
-		throw new Error(`Unsupported content type: ${contentType || "unknown"}. Only HTML and text resources can be fetched.`);
+		throw new Error(`Unsupported content type: ${contentType || "unknown"}. Only HTML, JSON and text resources can be read.`);
 	}
 
 	const body = await readBodyWithLimit(response);
-	let title: string | null = null;
-	let markdown: string;
-
-	if (isHtml) {
-		title = extractTitle(body);
-		markdown = convertHtmlToMarkdown(cleanHtml(body), finalUrl);
-	} else {
-		markdown = body.trim();
-	}
-
-	if (!markdown)
-		throw new Error("The page returned no readable content.");
-
-	log.debug(`Converted ${body.length} chars of ${contentType || "html"} into ${markdown.length} chars of markdown.`);
-
-	return {
+	const base = {
 		finalUrl,
-		title,
 		contentType: contentType || "text/html",
-		markdown,
+		sourceChars: body.length,
 		fetchedAt: Date.now()
 	};
+
+	if (!isHtml) {
+		let markdown = body.trim();
+
+		if (isJson) {
+			try {
+				markdown = JSON.stringify(JSON.parse(body), null, 1);
+			} catch {
+				// served as JSON, is not; keep the text
+			}
+		}
+
+		return { ...base, title: null, description: null, siteName: null, byline: null, published: null, lang: null, mode: "full", markdown };
+	}
+
+	const converted = convertHtml(body, finalUrl, options);
+
+	if (!converted.markdown)
+		throw new Error("The page returned no readable content (it may need JavaScript to render).");
+
+	log.debug(`Read ${body.length} chars of HTML as ${converted.markdown.length} chars of markdown (${converted.mode}).`);
+
+	return { ...base, ...converted };
 }
 
-function getCachedDocument(url: string): WebDocument | null {
-	const entry = cache.get(url);
-	if (!entry)
+function cacheKey(url: string, options: { mode: ReadMode; links: boolean; images: boolean }): string {
+	return `${options.mode}|${options.links ? 1 : 0}|${options.images ? 1 : 0}|${url}`;
+}
+
+function getCachedDocument(key: string): WebDocument | null {
+	const document = cache.get(key);
+	if (!document)
 		return null;
 
-	if ((Date.now() - entry.fetchedAt) > CACHE_TTL_MS) {
-		cache.delete(url);
+	if ((Date.now() - document.fetchedAt) > CACHE_TTL_MS) {
+		cache.delete(key);
 		return null;
 	}
 
-	return entry.document;
+	return document;
 }
 
-function storeCachedDocument(url: string, document: WebDocument): void {
-	cache.set(url, { fetchedAt: Date.now(), document });
+function storeCachedDocument(key: string, document: WebDocument): void {
+	cache.set(key, document);
 
-	while (cache.size > CACHE_MAX_ENTRIES) {
-		const oldest = cache.keys().next().value;
-		cache.delete(oldest as string);
-	}
+	while (cache.size > CACHE_MAX_ENTRIES)
+		cache.delete(cache.keys().next().value as string);
 }
 
 /**
- * Fetch a webpage and return its content as compact markdown. Long documents
- * are cached in memory and returned in chunks: pass `startIndex` (taken from
- * the previous result's `endIndex`) to continue reading.
+ * Read a webpage as compact markdown: the main content by default, without
+ * scripts, chrome, cookie walls, ads or images. Long documents are cached and
+ * returned in chunks: pass `startIndex` (the previous result's `endIndex`, or
+ * a heading's offset from `outline`) to continue reading.
  */
-export async function fetchWebpage(url: string, { maxLength = null, startIndex = null }: { maxLength?: number | null; startIndex?: number | null } = {}) {
+export async function fetchWebpage(url: string, options: ReadOptions = {}) {
 	let parsed: URL;
 
 	try {
@@ -313,19 +574,26 @@ export async function fetchWebpage(url: string, { maxLength = null, startIndex =
 	if (!["http:", "https:"].includes(parsed.protocol))
 		return { ok: false, error: "Only http and https URLs are supported." };
 
-	if (isPrivateHost(parsed.hostname))
-		return { ok: false, error: "Refusing to fetch private, local or internal addresses." };
+	const settings = {
+		mode: (options.mode === "full" ? "full" : "article") as ReadMode,
+		links: options.links !== false,
+		images: options.images === true
+	};
+	const chunkLength = Math.max(500, Math.min(MAX_CHUNK_LENGTH, Math.floor(options.maxLength || DEFAULT_CHUNK_LENGTH)));
+	const offset = Math.max(0, Math.floor(options.startIndex || 0));
+	const key = cacheKey(parsed.toString(), settings);
 
-	const chunkLength = Math.max(500, Math.min(MAX_CHUNK_LENGTH, Math.floor(maxLength || DEFAULT_CHUNK_LENGTH)));
-	const offset = Math.max(0, Math.floor(startIndex || 0));
-	const cacheKey = parsed.toString();
-
-	let document = getCachedDocument(cacheKey);
+	let document = getCachedDocument(key);
 	const cached = Boolean(document);
 
 	if (!document) {
-		document = await loadDocument(cacheKey);
-		storeCachedDocument(cacheKey, document);
+		try {
+			document = await loadDocument(parsed, settings);
+		} catch (err: any) {
+			return { ok: false, error: err?.message || String(err) };
+		}
+
+		storeCachedDocument(key, document);
 	}
 
 	if (offset >= document.markdown.length && document.markdown.length > 0) {
@@ -341,15 +609,22 @@ export async function fetchWebpage(url: string, { maxLength = null, startIndex =
 
 	return {
 		ok: true,
-		url: cacheKey,
+		url: parsed.toString(),
 		finalUrl: document.finalUrl,
 		title: document.title,
+		...(document.description ? { description: document.description } : {}),
+		...(document.siteName ? { siteName: document.siteName } : {}),
+		...(document.byline ? { byline: document.byline } : {}),
+		...(document.published ? { published: document.published } : {}),
+		...(document.lang ? { lang: document.lang } : {}),
 		contentType: document.contentType,
+		mode: document.mode,
 		totalLength: document.markdown.length,
 		startIndex: offset,
 		endIndex,
 		truncated,
-		...(truncated ? { hint: `Content truncated. Call fetch_webpage again with startIndex=${endIndex} to continue reading.` } : {}),
+		...(truncated && offset === 0 ? { outline: outline(document.markdown) } : {}),
+		...(truncated ? { hint: `Content truncated. Call fetch_webpage again with startIndex=${endIndex} to continue, or jump to a heading's startIndex from outline.` } : {}),
 		cached,
 		content
 	};

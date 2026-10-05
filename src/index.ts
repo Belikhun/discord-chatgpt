@@ -4,6 +4,7 @@ import "./conversation/memoryRecall";
 import { scope } from "./logger";
 import { authenticateDiscordClient } from "./discord/client";
 import { registerEvents } from "./discord/events";
+import { startMinecraftBridge } from "./minecraft";
 import { backfillEmbeddings, migrateLegacyMemories, purgeExpiredMemories } from "./stores/memory";
 
 //* ===========================================================
@@ -34,3 +35,12 @@ backfillEmbeddings().catch((err) => {
 registerEvents();
 
 await authenticateDiscordClient();
+
+//* ===========================================================
+//*  Join Minecraft chat
+//* -----------------------------------------------------------
+//*  After login, since replies are written as the bot and the
+//*  conversation layer reads the bot's own identity.
+//* ===========================================================
+
+startMinecraftBridge();

@@ -5,6 +5,7 @@ import { registerContextSource } from "../conversation/contextSources";
 import { listMcpServers, type McpServer } from "./config";
 import { resolveMcpState, type McpLocation } from "./enablement";
 import { McpConnection, type RemoteTool } from "./client";
+import { minecraftMcpServers } from "../minecraft/config";
 import { sanitizeToolName, sanitizeToolSchema } from "./schema";
 
 const log = scope("mcp");
@@ -34,14 +35,26 @@ export function locationOf(context: ToolContext): McpLocation {
 	};
 }
 
-/** Servers switched on where this request comes from. */
+/**
+ * Servers switched on where this request comes from. Minecraft chat has no
+ * guild or channel to enable a server in, so the bridge's own list decides.
+ */
 export function enabledServers(context: ToolContext): McpServer[] {
+	if (context.conversation?.channel.platform === "minecraft") {
+		const allowed = minecraftMcpServers();
+		return listMcpServers().filter((server) => allowed.has(server.id));
+	}
+
 	const location = locationOf(context);
 	return listMcpServers().filter((server) => resolveMcpState(server, location).enabled);
 }
 
 function onBehalfOf(context: ToolContext): Record<string, unknown> {
 	const message = context.message;
+
+	if (message?.onBehalfOf)
+		return message.onBehalfOf();
+
 	const channel = context.conversation?.channel;
 
 	return {

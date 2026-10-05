@@ -22,13 +22,16 @@ export function resolveConversation(channel: ConversationChannel, { modeOverride
 	if (existing)
 		return existing;
 
-	const model = config.get<string>(`model.${channel.id}`, MODEL_DEFAULT);
+	const minecraft = channel.platform === "minecraft" ? env.MINECRAFT_BRIDGE : undefined;
+	const model = config.get<string>(`model.${channel.id}`, minecraft?.MODEL || MODEL_DEFAULT);
 	const mode = modeOverride ?? config.get<ConversationMode>(`mode.${channel.id}`, (channel instanceof DMChannel) ? "assistant" : "chat");
 	const reasoningEffort = config.get<string>(`reasoning.${channel.id}`, "medium") || "medium";
 
 	let instructions: string;
 
-	if (mode === "chat") {
+	if (minecraft?.SYSTEM_ROLE) {
+		instructions = minecraft.SYSTEM_ROLE;
+	} else if (mode === "chat") {
 		if (typeof SYSTEM_ROLE_CHANNEL[channel.id] !== "undefined") {
 			instructions = SYSTEM_ROLE_CHANNEL[channel.id] as string;
 		} else if (channel.guild && typeof SYSTEM_ROLE_SERVER[channel.guild.id] !== "undefined") {
@@ -48,11 +51,11 @@ export function resolveConversation(channel: ConversationChannel, { modeOverride
 
 	const nicknames = config.get<Record<string, string>>("nicknames", {});
 	const conversation = new ChatConversation(channel, model, instructions, mode, {
-		nickname: nicknames[channel.guild?.id as string] || NICKNAME_DEFAULT,
+		nickname: minecraft?.NAME || nicknames[channel.guild?.id as string] || NICKNAME_DEFAULT,
 		reasoningEffort
 	}).restore();
 
-	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
+	conversation.conversationWakeupKeywords = [...WAKEUP_KEYWORDS, ...(minecraft?.WAKEUP_KEYWORDS ?? [])];
 	setConversation(channel.id, conversation);
 
 	return conversation;

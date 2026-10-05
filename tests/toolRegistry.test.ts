@@ -22,6 +22,7 @@ const BASE_TOOL_ORDER = [
 	"list_emojis",
 	"fetch_recent_messages",
 	"search_messages",
+	"web_search",
 	"fetch_webpage",
 	"minecraft_wiki_search",
 	"minecraft_wiki_search_content",

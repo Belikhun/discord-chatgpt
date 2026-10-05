@@ -6,7 +6,7 @@ import { getUserInfoTool, reactMessageTool, forwardMessageTool } from "./users";
 import { getServerInfoTool, listEmojisTool, fetchRecentMessagesTool, searchMessagesTool } from "./server";
 import { listConversationsTool, searchConversationHistoryTool } from "./conversations";
 import { memoryTools } from "./memory";
-import { fetchWebpageTool } from "./web";
+import { fetchWebpageTool, webSearchTool } from "./web";
 import { minecraftWikiSearchTool, minecraftWikiSearchContentTool, minecraftWikiReadContentTool } from "./minecraftWiki";
 import { moderationTools, getModerationCapabilities } from "./moderation";
 
@@ -26,11 +26,28 @@ const baseTools: Tool[] = [
 	listEmojisTool,
 	fetchRecentMessagesTool,
 	searchMessagesTool,
+	webSearchTool,
 	fetchWebpageTool,
 	minecraftWikiSearchTool,
 	minecraftWikiSearchContentTool,
 	minecraftWikiReadContentTool
 ];
+
+/**
+ * Built-ins that only make sense inside Discord (they read or act on Discord
+ * messages, users, emojis and servers), withheld from other surfaces.
+ */
+const discordOnlyTools = new Set<Tool>([
+	getUserInfoTool,
+	reactMessageTool,
+	forwardMessageTool,
+	getServerInfoTool,
+	listConversationsTool,
+	searchConversationHistoryTool,
+	listEmojisTool,
+	fetchRecentMessagesTool,
+	searchMessagesTool
+]);
 
 /** Built-in tools that can be dispatched without a per-request toolset. */
 const builtinTools = new Map<string, Tool>();
@@ -43,6 +60,11 @@ const builtinSource: ToolSource = {
 	id: "builtin",
 
 	async tools(context) {
+		const platform = context.conversation?.channel.platform ?? "discord";
+
+		if (platform !== "discord")
+			return baseTools.filter((tool) => !discordOnlyTools.has(tool));
+
 		const capabilities = await getModerationCapabilities(context);
 
 		return capabilities.fullModerationAccess

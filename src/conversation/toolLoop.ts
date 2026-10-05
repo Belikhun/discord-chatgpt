@@ -25,6 +25,9 @@ export interface ToolLoopOptions {
 	/** Every item produced (model output, then tool results), for history. */
 	onItems(items: ConversationItem[]): void;
 
+	/** Fired when the model asks for tools, before they run. */
+	onToolCalls?(calls: ToolCall[]): void;
+
 	/** Fired after a batch of tool calls settles, for the tool-call UI. */
 	onToolResults?(calls: ToolCall[], outputs: ToolResultItem[]): void;
 }
@@ -68,6 +71,9 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
 		if (response.toolCalls.length === 0)
 			return { response, passes: pass + 1, exhausted: false };
+
+		if (!finalPass)
+			options.onToolCalls?.(response.toolCalls);
 
 		// The final pass offered no tools, so a call here is the model ignoring
 		// that; answer it with an error so history stays well-formed.

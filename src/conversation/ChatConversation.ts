@@ -19,6 +19,30 @@ import type { ConversationChannel, ConversationMode, IncomingMessage } from "./t
 
 const SUMMARY_INSTRUCTIONS = "You maintain the running summary of a Discord conversation. Merge the new conversation into the summary so far. Keep who said what, decisions, open questions, facts people shared about themselves, and anything the assistant promised to do. Drop greetings and small talk. Write in the conversation's language, at most 250 words, plain prose or short bullets, no IDs except user mentions.";
 
+/**
+ * Asks the model to say it is on it before a long job, so nobody wonders
+ * whether they were heard: chat lines in Minecraft cannot be edited, and a
+ * chat-mode Discord reply only lands when the whole answer is done.
+ */
+const ACKNOWLEDGE_RULE = lines(
+	"Acknowledging long work:",
+	" - When answering needs tools (looking things up, searching the web, reading pages or server data), write one short sentence in the user's language saying you are on it, in the same response as your first tool call. It is sent to the chat right away; the full answer follows when you are done.",
+	" - Do not repeat that acknowledgement in the final answer, and do not acknowledge replies that need no tools."
+);
+
+/** Said when the model starts a long job without acknowledging it itself. */
+const FALLBACK_ACKNOWLEDGEMENTS = {
+	vi: ["Đợi mình chút, để mình xem nhé…", "Để mình kiểm tra đã nha…", "Ok, mình tra thử ngay…"],
+	en: ["Give me a moment, looking into it…", "On it, checking now…"]
+};
+
+/** Vietnamese if the text carries Vietnamese letters or tone marks, English otherwise. */
+function fallbackAcknowledgement(text: string | null | undefined): string {
+	const vietnamese = /[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i.test(text ?? "");
+	const pool = vietnamese ? FALLBACK_ACKNOWLEDGEMENTS.vi : FALLBACK_ACKNOWLEDGEMENTS.en;
+	return pool[Math.floor(Math.random() * pool.length)]!;
+}
+
 /** Model passes per chat-mode reply, the forced no-tools answer included. */
 const CHAT_MAX_PASSES = 6;
 
@@ -102,6 +126,7 @@ export class ChatConversation {
 		this.explicitTrigger = false;
 
 		this.instructions += "\n" + (channel.surfaceInstructions ?? ChatConversation.discordInstructions());
+		this.instructions += "\n\n" + ACKNOWLEDGE_RULE;
 
 		this.history = [];
 
@@ -458,7 +483,7 @@ export class ChatConversation {
 		let sent = false;
 
 		try {
-			sent = await this.produceReply({ activateChat, forceRespond }) !== null;
+			sent = await this.produceReply({ activateChat, forceRespond, explicit }) !== null;
 			return sent ? this.lastReplyText : null;
 		} finally {
 			progress?.end(sent);
@@ -468,8 +493,35 @@ export class ChatConversation {
 	/** Text of the last reply that went out, for `generateReply`'s return. */
 	private lastReplyText: string | null = null;
 
-	private async produceReply({ activateChat, forceRespond }: { activateChat: boolean; forceRespond: boolean }): Promise<string | null> {
+	private async produceReply({ activateChat, forceRespond, explicit }: { activateChat: boolean; forceRespond: boolean; explicit: boolean }): Promise<string | null> {
 		this.lastReplyText = null;
+
+		// The first tool pass gets an acknowledgement out before the work: the
+		// model's own when it wrote one, a stock one when the bot was addressed
+		// directly and the model said nothing. An unprompted turn without one
+		// stays quiet, since it may still end in [skip].
+		let acknowledgement: Promise<void> | null = null;
+		let acknowledgedText = "";
+
+		const acknowledge = (preamble: string) => {
+			if (acknowledgement)
+				return;
+
+			const own = preamble.trim();
+			const text = own && !own.startsWith("[skip]")
+				? own
+				: (explicit || forceRespond) ? fallbackAcknowledgement(this.lastMessage?.content) : "";
+
+			if (!text) {
+				acknowledgement = Promise.resolve();
+				return;
+			}
+
+			acknowledgedText = text;
+			acknowledgement = this.deliver(text).then(() => undefined, (err: any) => {
+				this.log.warn(`Failed to send the acknowledgement in channel ${this.channel.id}: ${err?.message || err}`);
+			});
+		};
 
 		const request = await this.buildResponseRequest(this.lastMessage, { forceRespond });
 		const provider = this.provider;
@@ -487,12 +539,22 @@ export class ChatConversation {
 			maxPasses: CHAT_MAX_PASSES,
 			call: (modelRequest) => provider.respond(modelRequest),
 			onItems: (items) => this.pushHistory(...items),
-			onToolCalls: (calls) => progress?.tools(calls),
+			onToolCalls: (calls, preamble) => {
+				acknowledge(preamble);
+				progress?.tools(calls);
+			},
 			onToolResults: (calls, outputs) => progress?.toolsDone(calls, outputs)
 		});
 
 		let output_text = response?.outputText ?? "";
 		this.log.info(`Got chat response: ${output_text}`);
+
+		if (acknowledgement)
+			await acknowledgement;
+
+		// A model that repeats its acknowledgement as the answer has said it already.
+		if (acknowledgedText && output_text.trim() === acknowledgedText)
+			output_text = "";
 
 		const trimmed = output_text.trim();
 
@@ -508,29 +570,13 @@ export class ChatConversation {
 
 		this.skipStreak = 0;
 
-		const canSend = () => {
-			if (this.platform !== "discord" || this.channel instanceof DMChannel)
-				return true;
-
-			const perms = this.channel.permissionsFor?.(discord.user);
-			return perms?.has("SendMessages") ?? false;
-		};
-
-		if (!canSend()) {
+		if (!this.canSend()) {
 			this.log.warn(`Missing SendMessages permission for channel ${this.channel.id}, skipping send.`);
 			return null;
 		}
 
 		try {
-			if (this.platform === "discord") {
-				output_text = this.processOutputEmojis(output_text);
-
-				for (const chunk of splitMessage(output_text))
-					await this.channel.send!({ content: chunk });
-			} else {
-				// The surface splits and formats its own lines.
-				await this.channel.send!({ content: output_text });
-			}
+			output_text = await this.deliver(output_text);
 		} catch (err: any) {
 			this.log.error(`Failed to send message to channel ${this.channel.id}: ${err.message}`);
 			return null;
@@ -539,6 +585,33 @@ export class ChatConversation {
 		this.log.info(`Response sent to channel ${this.channel.id}.`);
 		this.lastReplyText = output_text;
 		return output_text;
+	}
+
+	canSend(): boolean {
+		if (this.platform !== "discord" || this.channel instanceof DMChannel)
+			return true;
+
+		const perms = this.channel.permissionsFor?.(discord.user);
+		return perms?.has("SendMessages") ?? false;
+	}
+
+	/** Send text to the channel the way the surface wants it; resolves to what was sent. */
+	async deliver(text: string): Promise<string> {
+		if (!this.canSend())
+			throw new Error("missing SendMessages permission");
+
+		if (this.platform === "discord") {
+			const processed = this.processOutputEmojis(text);
+
+			for (const chunk of splitMessage(processed))
+				await this.channel.send!({ content: chunk });
+
+			return processed;
+		}
+
+		// The surface splits and formats its own lines.
+		await this.channel.send!({ content: text });
+		return text;
 	}
 
 	/**

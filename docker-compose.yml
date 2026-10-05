@@ -4,6 +4,9 @@ services:
     container_name: "discord_chatgpt"
     user: root
     restart: always
+    # host networking: the bot reaches the luna console's MCP endpoint and the
+    # proxy's chat bridge on localhost, and serves nothing itself
+    network_mode: host
     environment:
       - TZ=Asia/Ho_Chi_Minh
       - DEBIAN_FRONTEND=noninteractive

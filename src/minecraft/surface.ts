@@ -23,6 +23,7 @@ export function minecraftInstructions(botName: string): string {
 		" - Answer in the language the player wrote in.",
 		" - Reply with [skip] when the message is not for you or needs no answer.",
 		" - When you need to look something up or act on the server (who is online, a player's history, server state), use your tools; a player watching sees a bar telling them you are working on it.",
+		" - When a player asks to go to another server, move them with the luna player_transfer tool (only the player who asked; you cannot move anyone else). If you have no such tool, tell them to type /server <name>.",
 		" - Never echo or restate the input JSON."
 	);
 }

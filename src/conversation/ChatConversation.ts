@@ -1,17 +1,26 @@
 import { ComponentType, DMChannel } from "discord.js";
 import { scope, type Logger } from "../logger";
 import { lines } from "../format";
-import { ALL_EMOJIS } from "../emojis";
 import { any } from "../utils";
 import { discord } from "../discord/client";
 import { getProviderForModel } from "../ai/registry";
 import { ModelTrait } from "../ai/types";
 import type { ChatMessage, ConversationItem, HistoryEntry, MessagePart, ReasoningConfig, ToolDefinition } from "../ai/types";
-import { getToolDefinitions, runToolCalls, buildDeveloperMessages } from "../tools/registry";
+import { getToolDefinitions, buildDeveloperMessages } from "../tools/registry";
+import { appendHistory, compactHistory, loadHistory } from "../stores/history";
+import { buildContextMessages } from "./contextSources";
+import { estimateTokens, historyBudget, prepareHistory, startsTurn, transcript } from "./context";
 import type { ToolContext } from "../tools/types";
 import { ChatCompletion } from "./ChatCompletion";
+import { runToolLoop } from "./toolLoop";
 import { processOutputEmojis, getReusableCustomEmojiMentions } from "./emojiProcessing";
+import { splitMessage } from "./messageSplitter";
 import type { ConversationChannel, ConversationMode, IncomingMessage } from "./types";
+
+const SUMMARY_INSTRUCTIONS = "You maintain the running summary of a Discord conversation. Merge the new conversation into the summary so far. Keep who said what, decisions, open questions, facts people shared about themselves, and anything the assistant promised to do. Drop greetings and small talk. Write in the conversation's language, at most 250 words, plain prose or short bullets, no IDs except user mentions.";
+
+/** Model passes per chat-mode reply, the forced no-tools answer included. */
+const CHAT_MAX_PASSES = 6;
 
 export interface ResponseRequest {
 	context: ToolContext;
@@ -39,14 +48,30 @@ export class ChatConversation {
 
 	history: HistoryEntry[];
 
+	/** Key this conversation is stored under: the channel id, or `b:<channel>` for /b. */
+	key: string;
+
+	/** Rolling summary of every turn compacted out of `history`. */
+	summary: string;
+
+	private nextSeq: number;
+	private currentTurn: number;
+
+	private turnChain: Promise<unknown> = Promise.resolve();
+
 	/**
 	 * Create a new chat conversation.
 	 */
 	constructor(channel: ConversationChannel, model: string, instructions: string, mode: ConversationMode, {
 		nickname = "ChatGPT",
-		reasoningEffort = "medium"
-	}: { nickname?: string; reasoningEffort?: string } = {}) {
+		reasoningEffort = "medium",
+		key = channel.id
+	}: { nickname?: string; reasoningEffort?: string; key?: string } = {}) {
 		this.channel = channel;
+		this.key = key;
+		this.summary = "";
+		this.nextSeq = 1;
+		this.currentTurn = 0;
 		this.model = model;
 		this.mode = mode;
 		this.nickname = nickname;
@@ -100,12 +125,7 @@ export class ChatConversation {
 			" - Use only IDs provided; don't invent users, roles, or channels.",
 			" - The `message` field is the user's actual text; `replyingTo` gives reply context.",
 			"",
-			"The following custom emojis are available for use in responses (each separated by whitespace):",
-			"```",
-			Object.entries(ALL_EMOJIS)
-				.map(([name]) => `:${name}:`)
-				.join(" "),
-			"```"
+			"Custom server emojis are available; call list_emojis to see their names before using one."
 		);
 
 		this.history = [];
@@ -124,9 +144,23 @@ export class ChatConversation {
 	}
 
 	async buildResponseRequest(message: IncomingMessage | null = this.lastMessage, { forceRespond = false }: { forceRespond?: boolean } = {}): Promise<ResponseRequest> {
+		await this.compactIfNeeded();
+
 		const context = this.buildRuntimeContext(message, { forceRespond });
-		const developerMessages: ConversationItem[] = await buildDeveloperMessages(context);
-		let input: ConversationItem[] = this.history.map((entry) => entry.item);
+		const tools = await getToolDefinitions(context);
+		const developerMessages: ConversationItem[] = [
+			...await buildContextMessages(context),
+			...await buildDeveloperMessages(context)
+		];
+		let input: ConversationItem[] = prepareHistory(this.history);
+
+		if (this.summary) {
+			developerMessages.unshift({
+				kind: "message",
+				role: "developer",
+				content: [{ type: "text", text: `Summary of the earlier conversation in this channel:\n${this.summary}` }]
+			});
+		}
 
 		if (forceRespond) {
 			developerMessages.unshift({
@@ -142,15 +176,77 @@ export class ChatConversation {
 		if (developerMessages.length > 0)
 			input = developerMessages.concat(input);
 
-		return {
-			context,
-			input,
-			tools: await getToolDefinitions(context)
-		};
+		return { context, input, tools };
 	}
 
-	purgeExpiredHistory(): void {
-		this.history = this.history.filter(({ timestamp }) => ((Date.now() - timestamp) < 86400000));
+	/** Load persisted history and summary; called once when the conversation is created. */
+	restore(): this {
+		const stored = loadHistory(this.key);
+
+		this.summary = stored.summary;
+		this.history = stored.entries;
+		this.nextSeq = (stored.entries.at(-1)?.seq ?? 0) + 1;
+		this.currentTurn = stored.entries.at(-1)?.turn ?? 0;
+
+		if (stored.entries.length > 0 || stored.summary)
+			this.log.info(`Restored ${stored.entries.length} history item(s)${stored.summary ? " and a summary" : ""}.`);
+
+		return this;
+	}
+
+	/**
+	 * Fold the oldest turns into the rolling summary once history outgrows its
+	 * budget. Whole turns only, the newest two always kept, and the result is
+	 * cut to well under the budget so this does not run on every message.
+	 */
+	async compactIfNeeded(): Promise<void> {
+		const budget = historyBudget(this.model);
+		const total = this.history.reduce((sum, entry) => sum + (entry.tokens ?? estimateTokens(entry.item)), 0);
+
+		if (total <= budget)
+			return;
+
+		const turns = [...new Set(this.history.map((entry) => entry.turn ?? 0))];
+		const keepFrom = turns.length > 2 ? turns[turns.length - 2]! : turns[0]!;
+		const target = budget * 0.6;
+		let remaining = total;
+		let foldThroughTurn: number | null = null;
+
+		for (const turn of turns) {
+			if (turn >= keepFrom || remaining <= target)
+				break;
+
+			remaining -= this.history
+				.filter((entry) => (entry.turn ?? 0) === turn)
+				.reduce((sum, entry) => sum + (entry.tokens ?? estimateTokens(entry.item)), 0);
+
+			foldThroughTurn = turn;
+		}
+
+		if (foldThroughTurn === null)
+			return;
+
+		const folded = this.history.filter((entry) => (entry.turn ?? 0) <= foldThroughTurn!);
+		const kept = this.history.filter((entry) => (entry.turn ?? 0) > foldThroughTurn!);
+		const throughSeq = folded.at(-1)?.seq ?? 0;
+		let summary = this.summary;
+
+		try {
+			summary = await this.provider.generateText({
+				model: this.model,
+				instructions: SUMMARY_INSTRUCTIONS,
+				input: `Summary so far:\n${this.summary || "(none)"}\n\nConversation to fold in:\n${transcript(folded)}`
+			}) || this.summary;
+		} catch (err: any) {
+			// Over budget either way; dropping the oldest turns without a fresh
+			// summary loses less than refusing to answer.
+			this.log.warn(`Summarizing older history failed, dropping it unsummarized: ${err?.message || err}`);
+		}
+
+		this.history = kept;
+		this.summary = summary;
+		compactHistory(this.key, summary, throughSeq);
+		this.log.info(`Compacted ${folded.length} history item(s) into the summary (${total} → ${remaining} tokens).`);
 	}
 
 	isReasoningModel(): boolean {
@@ -169,14 +265,31 @@ export class ChatConversation {
 
 	pushHistory(...items: ConversationItem[]): void {
 		const timestamp = Date.now();
-		this.history.push(...items.map((item) => ({ item, timestamp })));
+		const entries: HistoryEntry[] = items.map((item) => {
+			if (startsTurn(item))
+				this.currentTurn += 1;
+
+			return { item, timestamp, seq: this.nextSeq++, turn: this.currentTurn, tokens: estimateTokens(item) };
+		});
+
+		this.history.push(...entries);
+
+		try {
+			appendHistory(this.key, {
+				guildId: this.channel.guild?.id ?? null,
+				channelId: this.channel.id,
+				mode: this.mode
+			}, entries);
+		} catch (err: any) {
+			// The in-memory history still works; the turn is only lost on restart.
+			this.log.error(`Failed to persist history: ${err?.message || err}`);
+		}
 	}
 
 	/**
 	 * Handle incomming message.
 	 */
 	async handle(message: IncomingMessage): Promise<this> {
-		this.purgeExpiredHistory();
 		this.log.info(`Handling message ${message.id} in channel ${message.channel.id}.`);
 
 		if (this.mode === "assistant") {
@@ -271,7 +384,6 @@ export class ChatConversation {
 	}
 
 	async handleStructuredPrompt(payload: string | Record<string, any>, { activateChat = true, role = "user" }: { activateChat?: boolean; role?: ChatMessage["role"] } = {}): Promise<this> {
-		this.purgeExpiredHistory();
 		this.lastMessage = null;
 
 		const text = (typeof payload === "string")
@@ -302,51 +414,52 @@ export class ChatConversation {
 
 		this.processing = true;
 		this.pendingProcess = false;
+
+		try {
+			return await this.exclusive(() => this.generateReply({ activateChat }));
+		} catch (err: any) {
+			// A provider error used to leave `processing` stuck on, which muted
+			// the channel until someone ran /clear.
+			this.log.error(`Failed to generate a reply in channel ${this.channel.id}: ${err?.message || err}`);
+			return null;
+		} finally {
+			this.processing = false;
+
+			if (this.pendingProcess)
+				this.scheduleProcess();
+		}
+	}
+
+	private async generateReply({ activateChat }: { activateChat: boolean }): Promise<string | null> {
 		this.log.info(`Start processing response for channel ${this.channel.id}.`);
 		const forceRespond = this.forceRespondOnNextProcess;
 		this.forceRespondOnNextProcess = false;
 		const request = await this.buildResponseRequest(this.lastMessage, { forceRespond });
-		const context = request.context;
 		const provider = this.provider;
-		let input = request.input;
 
-		let output_text = "";
-		let pass = 0;
-
-		while (pass < 3) {
-			const response = await provider.respond({
+		const { response } = await runToolLoop({
+			request: {
 				model: this.model,
 				instructions: this.instructions,
-				input,
+				input: request.input,
 				tools: request.tools,
 				reasoningEffort: this.getReasoningOptions()?.effort ?? null
-			});
+			},
+			context: request.context,
+			maxPasses: CHAT_MAX_PASSES,
+			call: (modelRequest) => provider.respond(modelRequest),
+			onItems: (items) => this.pushHistory(...items)
+		});
 
-			this.pushHistory(...response.items);
-
-			if (response.toolCalls.length === 0) {
-				output_text = response.outputText;
-				break;
-			}
-
-			const toolOutputs = await runToolCalls(response.toolCalls, context);
-			this.pushHistory(...toolOutputs);
-
-			input = input.concat(response.items, toolOutputs);
-			pass += 1;
-		}
-
+		let output_text = response?.outputText ?? "";
 		this.log.info(`Got chat response: ${output_text}`);
 
 		const trimmed = output_text.trim();
 
-		if (trimmed.length === 0 || !trimmed || trimmed === "[skip]" || trimmed === "`[skip]`" || trimmed.startsWith("[skip]")) {
+		if (trimmed.length === 0 || trimmed === "[skip]" || trimmed === "`[skip]`" || trimmed.startsWith("[skip]")) {
 			this.chatActivated = false;
 			this.skipStreak += 1;
 			this.log.info(`Response was [skip], not sending message.`);
-			this.processing = false;
-			if (this.pendingProcess)
-				this.scheduleProcess();
 			return null;
 		}
 
@@ -365,32 +478,32 @@ export class ChatConversation {
 
 		if (!canSend()) {
 			this.log.warn(`Missing SendMessages permission for channel ${this.channel.id}, skipping send.`);
-			this.processing = false;
-			if (this.pendingProcess)
-				this.scheduleProcess();
 			return null;
 		}
 
 		output_text = this.processOutputEmojis(output_text);
 
 		try {
-			await this.channel.send!({
-				content: output_text
-			});
+			for (const chunk of splitMessage(output_text))
+				await this.channel.send!({ content: chunk });
 		} catch (err: any) {
 			this.log.error(`Failed to send message to channel ${this.channel.id}: ${err.message}`);
-			this.processing = false;
-			if (this.pendingProcess)
-				this.scheduleProcess();
 			return null;
 		}
 
-		this.processing = false;
 		this.log.info(`Response sent to channel ${this.channel.id}.`);
-		if (this.pendingProcess)
-			this.scheduleProcess();
-
 		return output_text;
+	}
+
+	/**
+	 * Run one turn at a time. Chat mode already queues through `processing`,
+	 * but assistant mode starts a completion per message, and two quick
+	 * messages used to interleave their history.
+	 */
+	async exclusive<T>(work: () => Promise<T>): Promise<T> {
+		const run = this.turnChain.then(work, work);
+		this.turnChain = run.catch(() => undefined);
+		return await run;
 	}
 
 	processOutputEmojis(text: string): string {

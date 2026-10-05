@@ -35,6 +35,8 @@ function stub(id: string, models: { id: string; traits?: ModelTrait[]; displayNa
 		respond: async () => ({ items: [], outputText: "", toolCalls: [] }),
 		stream: (async function* () { })() as any,
 		generateText: async () => "",
+		defaultEmbeddingModel: "stub-embedding",
+		embed: async () => [],
 		extractTexts: () => []
 	};
 

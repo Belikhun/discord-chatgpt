@@ -53,6 +53,23 @@ export interface Env {
 	THINKING_MESSAGE: string;
 	IMAGE_GENERATING_MESSAGE: string;
 	NICKNAME_DEFAULT: string;
+
+	/**
+	 * Which provider and model embed memories for semantic search. Defaults to
+	 * the default provider and its own embedding model.
+	 */
+	EMBEDDING?: { PROVIDER?: string; MODEL?: string };
+
+	/**
+	 * Context budget. `HISTORY_TOKENS` caps how much conversation history is
+	 * sent per request (older turns are folded into a running summary), whatever
+	 * the model's window; a busy channel otherwise pays for its whole backlog
+	 * on every reply.
+	 */
+	CONTEXT?: { HISTORY_TOKENS?: number; RECALL_LIMIT?: number };
+
+	/** MCP servers the bot can use; see `src/mcp/config.ts`. */
+	MCP_SERVERS?: Record<string, import("./mcp/config").McpServerConfig>;
 }
 
 function loadEnv(): Env {

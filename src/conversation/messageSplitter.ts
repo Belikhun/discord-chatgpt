@@ -108,3 +108,29 @@ export function breakAndFixMessage(message: string, maxLength: number): { splitt
 	const leftoverInfo = checkClosingBlocks(leftover);
 	return { splitted, leftover, leftoverInfo };
 }
+
+/**
+ * Split a reply into Discord-sized messages, closing and reopening code
+ * blocks across the cut. Discord rejects a message over 2000 characters, and
+ * chat mode used to send replies whole.
+ */
+export function splitMessage(message: string, maxLength: number = 1900): string[] {
+	const chunks: string[] = [];
+	let rest = message;
+
+	while (rest.length > maxLength) {
+		const { splitted, leftover } = breakAndFixMessage(rest, maxLength);
+
+		// A cut that makes no progress would loop forever; send what is left.
+		if (!splitted || leftover.length >= rest.length)
+			break;
+
+		chunks.push(splitted);
+		rest = leftover;
+	}
+
+	if (rest.trim().length > 0)
+		chunks.push(rest);
+
+	return chunks;
+}

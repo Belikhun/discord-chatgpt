@@ -1,4 +1,5 @@
 import type { ChatConversation } from "./ChatConversation";
+import { clearHistory } from "../stores/history";
 
 /**
  * Shared in-memory store for active ChatConversation instances.
@@ -18,7 +19,10 @@ export function setConversation(channelId: string, conversation: ChatConversatio
 		return;
 	}
 
+	// Clearing a conversation (/clear, or a model or mode change) also forgets
+	// what is on disk, or the next message would restore it straight back.
 	conversationStore.delete(channelId);
+	clearHistory(channelId);
 }
 
 export function listConversations(): ChatConversation[] {

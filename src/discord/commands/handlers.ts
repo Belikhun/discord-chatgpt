@@ -1,4 +1,4 @@
-import type { ChatInputCommandInteraction, Guild, User } from "discord.js";
+import type { ChatInputCommandInteraction } from "discord.js";
 import { log } from "../../logger";
 import config from "../../config";
 import { code, emoji } from "../../format";
@@ -8,12 +8,15 @@ import { InteractionMessage } from "../InteractionMessage";
 import { buildErrorEmbed } from "../errorEmbed";
 import { isChannelBlacklisted, resolveBlacklistTargetChannel, setChannelBlacklist } from "../blacklist";
 import { isKnownModel } from "../../ai/registry";
+import { handleMcpCommand } from "./mcp";
 
 /**
- * Check if the user has Manage Messages permission in the guild.
+ * Check if the user has Manage Messages permission in the guild. Read off the
+ * interaction itself, which carries the member's resolved permissions; the
+ * member cache can miss the user and wrongly refuse them.
  */
-function hasManagePermission(guild: Guild | null, user: User): boolean {
-	return guild?.members.cache.get(user.id)?.permissions.has("ManageMessages") || false;
+function hasManagePermission(interaction: ChatInputCommandInteraction): boolean {
+	return interaction.memberPermissions?.has("ManageMessages") ?? false;
 }
 
 export async function handleChatInputCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -58,7 +61,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 			}
 
 			case "model": {
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -89,7 +92,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 			}
 
 			case "mode": {
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -110,7 +113,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 			}
 
 			case "reasoning": {
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -140,7 +143,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 					return;
 				}
 
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -187,7 +190,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 					return;
 				}
 
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -224,7 +227,7 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 			}
 
 			case "nickname": {
-				if (!hasManagePermission(interaction.guild, interaction.user)) {
+				if (!hasManagePermission(interaction)) {
 					await interaction.reply({
 						content: `${emoji("acerror")} Bạn cần có quyền Quản lý tin nhắn để sử dụng lệnh này!`,
 						ephemeral: true
@@ -252,6 +255,11 @@ export async function handleChatInputCommand(interaction: ChatInputCommandIntera
 					content: `${emoji("acinfo")} Nickname của bot trong máy chủ này đã được đặt thành ${code(name)}!`
 				});
 
+				break;
+			}
+
+			case "mcp": {
+				await handleMcpCommand(interaction);
 				break;
 			}
 

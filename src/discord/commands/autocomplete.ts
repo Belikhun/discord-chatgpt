@@ -1,3 +1,4 @@
+import { listMcpServers } from "../../mcp/config";
 import type { AutocompleteInteraction } from "discord.js";
 import { log } from "../../logger";
 import { searchModels } from "../../ai/registry";
@@ -46,6 +47,18 @@ function describeModel(model: ModelInfo): string {
 export async function handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
 	try {
 		const focused = interaction.options.getFocused(true);
+
+		if (focused.name === "server") {
+			const needle = focused.value.toLowerCase();
+
+			await interaction.respond(
+				listMcpServers()
+					.filter((server) => server.id.toLowerCase().includes(needle) || server.name.toLowerCase().includes(needle))
+					.slice(0, 25)
+					.map((server) => ({ name: server.name === server.id ? server.id : `${server.name} (${server.id})`, value: server.id }))
+			);
+			return;
+		}
 
 		if (focused.name !== "model") {
 			await interaction.respond([]);

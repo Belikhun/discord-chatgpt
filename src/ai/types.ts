@@ -59,6 +59,12 @@ export interface ModelInfo {
 	provider: string;
 
 	traits: readonly ModelTrait[];
+
+	/**
+	 * Input context window in tokens, when known. Conversations budget their
+	 * history against it; uncatalogued models fall back to a conservative size.
+	 */
+	contextWindow?: number;
 }
 
 export type ChatRole = "user" | "developer" | "assistant";
@@ -94,6 +100,15 @@ export type ConversationItem = ChatMessage | ProviderItem | ToolResultItem;
 export interface HistoryEntry {
 	item: ConversationItem;
 	timestamp: number;
+
+	/** Position in the conversation; the persisted row key. */
+	seq?: number;
+
+	/** The turn the item belongs to; compaction removes whole turns. */
+	turn?: number;
+
+	/** Rough token cost, estimated once when the entry is recorded. */
+	tokens?: number;
 }
 
 /** A function tool the model can call, in neutral JSON-schema form. */
@@ -178,6 +193,12 @@ export interface AIProvider {
 
 	/** Simple text-in/text-out helper (used for e.g. memory summarization). */
 	generateText(options: { model: string; instructions: string; input: string }): Promise<string>;
+
+	/** Embedding model used when the caller names none. */
+	readonly defaultEmbeddingModel: string;
+
+	/** Embed texts into vectors, one per input, in input order. */
+	embed(texts: string[], model?: string): Promise<Float32Array[]>;
 
 	/** Extract plain text fragments from a provider-native history item. */
 	extractTexts(item: ProviderItem): string[];

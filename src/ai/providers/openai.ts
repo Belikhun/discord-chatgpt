@@ -375,6 +375,19 @@ export class OpenAIProvider implements AIProvider {
 		return (response.output_text || this.extractOutputText((response.output as Record<string, any>[]) || []) || "").trim();
 	}
 
+	readonly defaultEmbeddingModel = "text-embedding-3-small";
+
+	async embed(texts: string[], model: string = this.defaultEmbeddingModel): Promise<Float32Array[]> {
+		if (texts.length === 0)
+			return [];
+
+		const response = await this.client.embeddings.create({ model, input: texts });
+
+		return response.data
+			.sort((a, b) => a.index - b.index)
+			.map((entry) => Float32Array.from(entry.embedding));
+	}
+
 	extractTexts(item: ProviderItem): string[] {
 		const texts: string[] = [];
 		const raw = item.item;

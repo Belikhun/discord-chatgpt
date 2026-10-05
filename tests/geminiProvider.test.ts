@@ -198,6 +198,8 @@ describe("cross-provider history", () => {
 			respond: async () => ({ items: [], outputText: "", toolCalls: [] }),
 			stream: (async function* () { })() as any,
 			generateText: async () => "",
+			defaultEmbeddingModel: "stub-embedding",
+			embed: async () => [],
 			extractTexts: () => ["carried over text"]
 		};
 

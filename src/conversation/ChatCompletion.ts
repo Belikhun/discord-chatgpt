@@ -5,10 +5,13 @@ import { scope, type Logger } from "../logger";
 import { env } from "../env";
 import { ModelTrait } from "../ai/types";
 import type { MessagePart, ModelResponse, StreamEvent, ToolCall, ToolResultItem } from "../ai/types";
-import { runToolCalls } from "../tools/registry";
+import { runToolLoop } from "./toolLoop";
 import type { ChatConversation } from "./ChatConversation";
 import { breakAndFixMessage, checkClosingBlocks, MESSAGE_MAX_LENGTH } from "./messageSplitter";
 import type { IncomingMessage, MessageHandle } from "./types";
+
+/** Model passes per assistant reply, the forced no-tools answer included. */
+const ASSISTANT_MAX_PASSES = 20;
 
 const { THINKING_MESSAGE, IMAGE_GENERATING_MESSAGE } = env;
 
@@ -309,6 +312,10 @@ export class ChatCompletion {
 	}
 
 	async start(): Promise<void> {
+		await this.conversation.exclusive(() => this.run());
+	}
+
+	private async run(): Promise<void> {
 		this.startTime = performance.now();
 		this.startDate = new Date();
 		this.log.info(`Chat completion started`);
@@ -345,58 +352,33 @@ export class ChatCompletion {
 		this.conversation.lastMessage = this.originalMessage;
 
 		const request = await this.conversation.buildResponseRequest(this.originalMessage);
-		const runtimeContext = request.context;
 		const provider = this.conversation.provider;
-		const reasoningEffort = this.conversation.getReasoningOptions()?.effort ?? null;
 
-		let input = request.input;
-
-		let pass = 0;
-		const maxPasses = 20;
-		let finalResponse: ModelResponse | null = null;
-		let toolCalls: ToolCall[] = [];
-
-		while (pass < maxPasses) {
-			const result = await this.runResponseStream(provider.stream({
+		const { exhausted } = await runToolLoop({
+			request: {
 				model: this.model,
 				instructions: this.conversation.instructions,
-				input,
+				input: request.input,
 				tools: request.tools,
-				reasoningEffort,
+				reasoningEffort: this.conversation.getReasoningOptions()?.effort ?? null,
 				enableWebSearch: true,
 				enableImageGeneration: true
-			}));
-
-			finalResponse = result;
-			toolCalls = result?.toolCalls || [];
-
-			if (finalResponse?.items?.length) {
-				this.conversation.pushHistory(...finalResponse.items);
+			},
+			context: request.context,
+			maxPasses: ASSISTANT_MAX_PASSES,
+			call: (modelRequest) => this.runResponseStream(provider.stream(modelRequest)),
+			onItems: (items) => {
+				if (items.length > 0)
+					this.conversation.pushHistory(...items);
+			},
+			onToolResults: (calls, outputs) => {
+				this.markToolResults(calls, outputs);
+				this.log.info(`Tool calls completed: ${calls.map((call) => call.name).join(", ")}`);
 			}
+		});
 
-			if (!toolCalls || toolCalls.length === 0) {
-				break;
-			}
-
-			pass += 1;
-			if (pass >= maxPasses) {
-				this.log.warn(`Tool loop reached max passes (${maxPasses}), stopping further tool calls.`);
-				break;
-			}
-
-			this.log.info(`Processing ${toolCalls.length} tool call(s).`);
-
-			const toolOutputs = await runToolCalls(toolCalls, {
-				...runtimeContext
-			});
-
-			this.markToolResults(toolCalls, toolOutputs);
-			this.log.info(`Tool calls completed: ${toolCalls.map((call) => call.name).join(", ")}`);
-
-			this.conversation.pushHistory(...toolOutputs);
-
-			input = input.concat(finalResponse?.items || [], toolOutputs);
-		}
+		if (exhausted)
+			this.log.warn(`Tool loop reached max passes (${ASSISTANT_MAX_PASSES}); the last pass was sent without tools.`);
 
 		if (!this.inResponse && this.responses.length === 0 && this.responseBuffer.trim().length === 0) {
 			this.handleOutput("*Không có nội dung phản hồi*");
@@ -514,7 +496,8 @@ export class ChatCompletion {
 		this.toolCallStatus.set(toolName, "calling");
 		this.toolTimelineIndex.set(toolKey, this.pushTimelineEntry({
 			type: "tool",
-			title: `Gọi công cụ ${toolName}`,
+			// MCP tools arrive as "<server>__<tool>"; show which server answers
+			title: `Gọi công cụ ${toolName.replace("__", " › ")}`,
 			detail: "Đang chờ kết quả...",
 			status: "calling"
 		}));

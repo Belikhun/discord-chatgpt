@@ -12,8 +12,11 @@ const BASE_TOOL_ORDER = [
 	"react_message",
 	"forward_message",
 	"get_server_info",
-	"list_memories",
-	"create_memory",
+	"memory_save",
+	"memory_search",
+	"memory_list",
+	"memory_update",
+	"memory_forget",
 	"list_conversations",
 	"search_conversation_history",
 	"list_emojis",
@@ -74,7 +77,7 @@ describe("tool dispatch", () => {
 		expect(typeof payload.error).toBe("string");
 	});
 
-	test("runToolCalls executes sequentially and preserves order", async () => {
+	test("runToolCalls runs concurrently and preserves order", async () => {
 		const results = await runToolCalls([
 			{ id: "a", name: "not_a_tool", arguments: "{}" },
 			{ id: "b", name: "also_missing", arguments: "{}" }

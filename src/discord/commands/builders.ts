@@ -87,6 +87,41 @@ export function buildCommands(): any[] {
 			}),
 
 		new SlashCommandBuilder()
+			.setName("mcp")
+			.setDescription("Quản lý các máy chủ MCP (công cụ bên ngoài) mà bot được dùng")
+			.addSubcommand((sub) => sub
+				.setName("list")
+				.setDescription("Xem các máy chủ MCP và trạng thái của chúng ở kênh này"))
+			.addSubcommand((sub) => sub
+				.setName("enable")
+				.setDescription("Bật một máy chủ MCP cho kênh hoặc máy chủ này")
+				.addStringOption((option) => option.setName("server").setDescription("Máy chủ MCP").setRequired(true).setAutocomplete(true))
+				.addStringOption((option) => option.setName("scope").setDescription("Phạm vi áp dụng").setRequired(true).addChoices(
+					{ name: "Kênh này", value: "channel" },
+					{ name: "Cả máy chủ", value: "guild" }
+				)))
+			.addSubcommand((sub) => sub
+				.setName("disable")
+				.setDescription("Tắt một máy chủ MCP cho kênh hoặc máy chủ này")
+				.addStringOption((option) => option.setName("server").setDescription("Máy chủ MCP").setRequired(true).setAutocomplete(true))
+				.addStringOption((option) => option.setName("scope").setDescription("Phạm vi áp dụng").setRequired(true).addChoices(
+					{ name: "Kênh này", value: "channel" },
+					{ name: "Cả máy chủ", value: "guild" }
+				)))
+			.addSubcommand((sub) => sub
+				.setName("reset")
+				.setDescription("Bỏ lựa chọn bật/tắt, quay về thiết lập của phạm vi rộng hơn")
+				.addStringOption((option) => option.setName("server").setDescription("Máy chủ MCP").setRequired(true).setAutocomplete(true))
+				.addStringOption((option) => option.setName("scope").setDescription("Phạm vi áp dụng").setRequired(true).addChoices(
+					{ name: "Kênh này", value: "channel" },
+					{ name: "Cả máy chủ", value: "guild" }
+				)))
+			.addSubcommand((sub) => sub
+				.setName("tools")
+				.setDescription("Xem các công cụ một máy chủ MCP cung cấp")
+				.addStringOption((option) => option.setName("server").setDescription("Máy chủ MCP").setRequired(true).setAutocomplete(true))),
+
+		new SlashCommandBuilder()
 			.setName("nickname")
 			.setDescription("Đặt nickname cho bot trong máy chủ hiện tại")
 			.addStringOption((option) => {

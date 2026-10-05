@@ -3,7 +3,6 @@ import config from "../config";
 import { env } from "../env";
 import { ChatConversation } from "./ChatConversation";
 import { getConversation, setConversation } from "./store";
-import { applyMemorySummaryToConversation } from "./memorySummary";
 import type { ConversationChannel, ConversationMode } from "./types";
 
 const {
@@ -17,19 +16,6 @@ const {
 	MODEL_DEFAULT,
 	NICKNAME_DEFAULT
 } = env;
-
-export function applyMemorySummary(conversation: ChatConversation): void {
-	const guildId = conversation?.channel?.guild?.id;
-	if (!guildId)
-		return;
-
-	const summaries = config.get<Record<string, string>>("memorySummaries", {});
-	const summary = summaries?.[guildId];
-	if (!summary)
-		return;
-
-	applyMemorySummaryToConversation(conversation, summary);
-}
 
 export function resolveConversation(channel: ConversationChannel, { modeOverride }: { modeOverride?: ConversationMode } = {}): ChatConversation {
 	const existing = getConversation(channel.id);
@@ -64,10 +50,9 @@ export function resolveConversation(channel: ConversationChannel, { modeOverride
 	const conversation = new ChatConversation(channel, model, instructions, mode, {
 		nickname: nicknames[channel.guild?.id as string] || NICKNAME_DEFAULT,
 		reasoningEffort
-	});
+	}).restore();
 
 	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
-	applyMemorySummary(conversation);
 	setConversation(channel.id, conversation);
 
 	return conversation;
@@ -125,11 +110,11 @@ export function resolveAssistantConversation(interaction: ChatInputCommandIntera
 	const nicknames = config.get<Record<string, string>>("nicknames", {});
 	conversation = new ChatConversation(channel, conversationModel, instructions, "assistant", {
 		nickname: nicknames[interaction.guild?.id as string] || NICKNAME_DEFAULT,
-		reasoningEffort
-	});
+		reasoningEffort,
+		key
+	}).restore();
 
 	conversation.conversationWakeupKeywords = WAKEUP_KEYWORDS;
-	applyMemorySummary(conversation);
 	setConversation(key, conversation);
 
 	return conversation;

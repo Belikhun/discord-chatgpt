@@ -145,6 +145,23 @@ export class GeminiProvider implements AIProvider {
 	 * `additionalProperties`.
 	 */
 	private toGeminiSchema(schema: Record<string, any>): Schema {
+		// A nullable union (`anyOf: [{…}, {type: "null"}]`, common in MCP
+		// schemas) is one schema plus `nullable` in Gemini's dialect.
+		const union = schema.anyOf ?? schema.oneOf;
+		if (Array.isArray(union)) {
+			const nonNull = union.filter((entry: Record<string, any>) => entry?.type !== "null");
+
+			if (nonNull.length === 1) {
+				const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = schema;
+				const merged = this.toGeminiSchema({ ...nonNull[0], ...rest }) as Record<string, any>;
+
+				if (nonNull.length < union.length)
+					merged.nullable = true;
+
+				return merged as Schema;
+			}
+		}
+
 		const converted: Record<string, any> = {};
 
 		if (Array.isArray(schema.type)) {
@@ -157,9 +174,20 @@ export class GeminiProvider implements AIProvider {
 			converted.type = schema.type.toUpperCase();
 		}
 
+		if (!converted.type && schema.properties)
+			converted.type = "OBJECT";
+
 		for (const key of ["description", "enum", "required", "format", "title", "default", "minimum", "maximum", "minItems", "maxItems", "nullable"]) {
 			if (schema[key] !== undefined)
 				converted[key] = schema[key];
+		}
+
+		// Gemini enums are strings only; a null member means nullable.
+		if (Array.isArray(converted.enum)) {
+			if (converted.enum.includes(null))
+				converted.nullable = true;
+
+			converted.enum = converted.enum.filter((value: unknown) => value !== null).map(String);
 		}
 
 		if (schema.properties) {
@@ -172,8 +200,8 @@ export class GeminiProvider implements AIProvider {
 		if (schema.items)
 			converted.items = this.toGeminiSchema(schema.items);
 
-		if (Array.isArray(schema.anyOf))
-			converted.anyOf = schema.anyOf.map((entry: Record<string, any>) => this.toGeminiSchema(entry));
+		if (Array.isArray(union))
+			converted.anyOf = union.map((entry: Record<string, any>) => this.toGeminiSchema(entry));
 
 		return converted as Schema;
 	}
@@ -460,6 +488,17 @@ export class GeminiProvider implements AIProvider {
 
 		const parts = (response.candidates?.[0]?.content?.parts || []) as Part[];
 		return (response.text || this.extractText(parts) || "").trim();
+	}
+
+	readonly defaultEmbeddingModel = "gemini-embedding-001";
+
+	async embed(texts: string[], model: string = this.defaultEmbeddingModel): Promise<Float32Array[]> {
+		if (texts.length === 0)
+			return [];
+
+		const response = await this.client.models.embedContent({ model, contents: texts });
+
+		return (response.embeddings ?? []).map((entry) => Float32Array.from(entry.values ?? []));
 	}
 
 	extractTexts(item: ProviderItem): string[] {

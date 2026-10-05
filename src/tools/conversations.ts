@@ -4,6 +4,18 @@ import { listConversations as listStoredConversations } from "../conversation/st
 import { resolveGuild } from "./resolve";
 import type { Tool, ToolContext } from "./types";
 
+/**
+ * Whether another conversation may be read from here: same guild only, and
+ * from a DM nothing but that DM itself. Comparing `guild?.id` alone let a DM
+ * (no guild) match every other DM and every guild conversation.
+ */
+function isVisibleConversation(channel: { id: string; guild?: { id: string } | null }, guildId: string | null, currentChannelId: string | null): boolean {
+	if (!guildId)
+		return channel.id === currentChannelId;
+
+	return channel.guild?.id === guildId;
+}
+
 export const listConversationsTool: Tool = {
 	definition: {
 		name: "list_conversations",
@@ -46,7 +58,7 @@ export const listConversationsTool: Tool = {
 					return false;
 				if (!includeSelf && conversation.channel.id === currentChannelId)
 					return false;
-				if (guild?.id && conversation.channel.guild?.id !== guild.id)
+				if (!isVisibleConversation(conversation.channel, guild?.id ?? null, currentChannelId))
 					return false;
 				return true;
 			})
@@ -139,7 +151,7 @@ export const searchConversationHistoryTool: Tool = {
 				continue;
 			if (!includeSelf && conversation.channel.id === currentChannelId)
 				continue;
-			if (guild?.id && conversation.channel.guild?.id !== guild.id)
+			if (!isVisibleConversation(conversation.channel, guild?.id ?? null, currentChannelId))
 				continue;
 			if (allowedIds && !allowedIds.has(conversation.channel.id))
 				continue;

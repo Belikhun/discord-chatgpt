@@ -1,10 +1,11 @@
 import { scope } from "../logger";
 import type { ToolCall, ToolDefinition, ToolResultItem } from "../ai/types";
-import type { Tool, ToolContext } from "./types";
+import { DEFAULT_TOOL_TIMEOUT_MS, MAX_TOOL_OUTPUT_CHARS } from "./types";
+import type { Tool, ToolContext, ToolSource } from "./types";
 import { getUserInfoTool, reactMessageTool, forwardMessageTool } from "./users";
 import { getServerInfoTool, listEmojisTool, fetchRecentMessagesTool, searchMessagesTool } from "./server";
 import { listConversationsTool, searchConversationHistoryTool } from "./conversations";
-import { listMemoriesTool, createMemoryTool } from "./memory";
+import { memoryTools } from "./memory";
 import { fetchWebpageTool } from "./web";
 import { minecraftWikiSearchTool, minecraftWikiSearchContentTool, minecraftWikiReadContentTool } from "./minecraftWiki";
 import { moderationTools, getModerationCapabilities } from "./moderation";
@@ -19,8 +20,7 @@ const baseTools: Tool[] = [
 	reactMessageTool,
 	forwardMessageTool,
 	getServerInfoTool,
-	listMemoriesTool,
-	createMemoryTool,
+	...memoryTools,
 	listConversationsTool,
 	searchConversationHistoryTool,
 	listEmojisTool,
@@ -32,32 +32,109 @@ const baseTools: Tool[] = [
 	minecraftWikiReadContentTool
 ];
 
-/** All executable tools, including permission-gated ones. */
-const allTools = new Map<string, Tool>();
+/** Built-in tools that can be dispatched without a per-request toolset. */
+const builtinTools = new Map<string, Tool>();
 
 for (const tool of [...baseTools, ...moderationTools])
-	allTools.set(tool.definition.name, tool);
+	builtinTools.set(tool.definition.name, tool);
+
+/** Built-in tools, with moderation tools only when the bot has full moderation access. */
+const builtinSource: ToolSource = {
+	id: "builtin",
+
+	async tools(context) {
+		const capabilities = await getModerationCapabilities(context);
+
+		return capabilities.fullModerationAccess
+			? [...baseTools, ...moderationTools]
+			: baseTools;
+	}
+};
+
+const sources: ToolSource[] = [builtinSource];
+
+/**
+ * Register an extra tool source (an MCP client, for one). Sources are asked
+ * in registration order and a later tool never shadows an earlier name.
+ */
+export function registerToolSource(source: ToolSource): void {
+	const existing = sources.findIndex((entry) => entry.id === source.id);
+
+	if (existing >= 0)
+		sources.splice(existing, 1, source);
+	else
+		sources.push(source);
+}
+
+/**
+ * Resolve every tool available in this context, and remember the result on
+ * the context so dispatch only ever runs a tool that was actually offered.
+ */
+export async function getTools(context: ToolContext = {}): Promise<Tool[]> {
+	const toolset = new Map<string, Tool>();
+
+	for (const source of sources) {
+		let tools: Tool[];
+
+		try {
+			tools = await source.tools(context);
+		} catch (err: any) {
+			// One broken source (an unreachable MCP server) must not take the
+			// built-in tools down with it.
+			log.warn(`Tool source ${source.id} failed: ${err?.message || err}`);
+			continue;
+		}
+
+		for (const tool of tools) {
+			if (toolset.has(tool.definition.name)) {
+				log.warn(`Tool ${tool.definition.name} from ${source.id} shadows an existing tool, skipping.`);
+				continue;
+			}
+
+			toolset.set(tool.definition.name, tool);
+		}
+	}
+
+	context.toolset = toolset;
+	return [...toolset.values()];
+}
 
 /**
  * Get the tool definitions offered to the model for the given context.
  * Moderation tools are only offered when the bot has full moderation access.
  */
 export async function getToolDefinitions(context: ToolContext = {}): Promise<ToolDefinition[]> {
-	const definitions = baseTools.map((tool) => tool.definition);
+	return (await getTools(context)).map((tool) => tool.definition);
+}
 
-	const capabilities = await getModerationCapabilities(context);
-	if (capabilities.fullModerationAccess)
-		definitions.push(...moderationTools.map((tool) => tool.definition));
+/** Look a tool up by name: the per-request toolset when there is one, else the built-ins. */
+export function findTool(name: string, context: ToolContext = {}): Tool | undefined {
+	return context.toolset?.get(name) ?? builtinTools.get(name);
+}
 
-	return definitions;
+function truncateOutput(output: string): string {
+	if (output.length <= MAX_TOOL_OUTPUT_CHARS)
+		return output;
+
+	return `${output.slice(0, MAX_TOOL_OUTPUT_CHARS)}… [truncated ${output.length - MAX_TOOL_OUTPUT_CHARS} characters]`;
 }
 
 function wrapToolOutput(callId: string, payload: Record<string, any>): ToolResultItem {
 	return {
 		kind: "tool_result",
 		callId,
-		output: JSON.stringify(payload)
+		output: truncateOutput(JSON.stringify(payload))
 	};
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, name: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`Tool ${name} timed out after ${Math.round(ms / 1000)}s`)), ms);
+	});
+
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 export async function runToolCall(call: ToolCall, context: ToolContext = {}): Promise<ToolResultItem> {
@@ -73,7 +150,7 @@ export async function runToolCall(call: ToolCall, context: ToolContext = {}): Pr
 		});
 	}
 
-	const tool = allTools.get(name);
+	const tool = findTool(name, context);
 	if (!tool) {
 		return wrapToolOutput(id, {
 			ok: false,
@@ -82,7 +159,8 @@ export async function runToolCall(call: ToolCall, context: ToolContext = {}): Pr
 	}
 
 	try {
-		return wrapToolOutput(id, await tool.execute(args, context));
+		const result = await withTimeout(tool.execute(args, context), tool.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS, name);
+		return wrapToolOutput(id, result);
 	} catch (err: any) {
 		const detail = {
 			name,
@@ -99,12 +177,10 @@ export async function runToolCall(call: ToolCall, context: ToolContext = {}): Pr
 	}
 }
 
+/**
+ * Run a batch of tool calls concurrently. Results come back in call order,
+ * which is what the providers pair outputs against.
+ */
 export async function runToolCalls(toolCalls: ToolCall[], context: ToolContext = {}): Promise<ToolResultItem[]> {
-	const results: ToolResultItem[] = [];
-
-	for (const call of toolCalls) {
-		results.push(await runToolCall(call, context));
-	}
-
-	return results;
+	return await Promise.all(toolCalls.map((call) => runToolCall(call, context)));
 }

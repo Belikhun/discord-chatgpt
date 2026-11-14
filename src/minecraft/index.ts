@@ -94,6 +94,11 @@ async function onChat(bridge: BridgeClient, event: BridgeChatEvent): Promise<voi
 	if (!event.message?.trim())
 		return;
 
+	// Stay quiet for servers listed in IGNORE_SERVERS (e.g. a minigame server).
+	const ignored = (settings.IGNORE_SERVERS ?? []).map((name) => name.toLowerCase());
+	if (event.source === "minecraft" && event.server?.name && ignored.includes(event.server.name.toLowerCase()))
+		return;
+
 	const target = networkChannel(bridge);
 	const botName = minecraftBotName();
 

@@ -37,6 +37,9 @@ export interface MinecraftBridgeConfig {
 	/** Discord channels to stay out of, on top of the ones the proxy reports bridging. */
 	IGNORE_DISCORD_CHANNELS?: string[];
 
+	/** Backend servers (velocity names) whose players' chat the bot ignores. */
+	IGNORE_SERVERS?: string[];
+
 	BOSSBAR?: {
 		/** Default true. */
 		ENABLED?: boolean;

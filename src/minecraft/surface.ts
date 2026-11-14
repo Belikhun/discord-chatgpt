@@ -10,7 +10,7 @@ export function minecraftInstructions(botName: string): string {
 		'  "server"?: { "name": string, "display": string },   // where the player is',
 		'  "player"?: { "name", "uuid", "display", "group", "ping", "client", "onlineMinutes" },',
 		'  "status"?: { ... },   // what their server reported with the line: dimension, position, health, level, gamemode, when available',
-		'  "author"?: { "name", "username" },   // source "discord": a Discord user in the channel bridged into Minecraft',
+		'  "author"?: { "id", "name", "username" },   // source "discord": a Discord user in the channel bridged into Minecraft',
 		'  "online"?: string[],   // who is online on the network right now',
 		'  "message": string }',
 		"",

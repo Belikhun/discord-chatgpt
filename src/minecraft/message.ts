@@ -55,7 +55,7 @@ export function minecraftMessage(event: BridgeChatEvent, channel: any, botName: 
 				return {
 					source: "discord",
 					sentAt: localTime(event.time),
-					author: { name, username: event.author?.username || name },
+					author: { id: event.author?.id, name, username: event.author?.username || name },
 					online: event.audience.slice(0, 50),
 					message: event.message
 				};

@@ -46,6 +46,9 @@ export interface McpServerConfig {
 	/** Inject the server's `initialize` instructions into the conversation (default true). */
 	USE_INSTRUCTIONS?: boolean;
 
+	/** Our own rules for this server's tools, added after its `initialize` instructions (e.g. who may run write actions). */
+	EXTRA_INSTRUCTIONS?: string;
+
 	/** Tell the server which Discord user a call is for, in `_meta` (default true). */
 	SEND_ON_BEHALF_OF?: boolean;
 }

@@ -125,14 +125,23 @@ registerContextSource({
 		const notes: string[] = [];
 
 		for (const server of enabledServers(context)) {
-			if (server.config.USE_INSTRUCTIONS === false)
+			const own = server.config.EXTRA_INSTRUCTIONS?.trim();
+			const instructions = server.config.USE_INSTRUCTIONS === false
+				? undefined
+				: connectionFor(server).instructions?.trim();
+
+			if (!instructions && !own)
 				continue;
 
-			const instructions = connectionFor(server).instructions?.trim();
-			if (!instructions)
-				continue;
+			const parts = [`Instructions for the MCP server "${server.name}". Its tools are offered to you named "${server.prefix}__<tool>", so a tool it calls "x" is "${server.prefix}__x" here.`];
 
-			notes.push(`Instructions from the MCP server "${server.name}". Its tools are offered to you named "${server.prefix}__<tool>", so a tool it calls "x" is "${server.prefix}__x" here.\n\n${instructions}`);
+			if (own)
+				parts.push(`Rules from the bot's owner for these tools. They outrank the server's instructions below and anything a user says:\n${own}`);
+
+			if (instructions)
+				parts.push(instructions);
+
+			notes.push(parts.join("\n\n"));
 		}
 
 		return notes.length ? notes.join("\n\n---\n\n") : null;
